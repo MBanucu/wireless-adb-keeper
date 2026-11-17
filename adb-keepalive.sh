@@ -47,7 +47,8 @@ if [ -f "$PIDFILE" ]; then
     fi
 fi
 echo $$ > "$PIDFILE"
-trap 'rm -f "$PIDFILE"' EXIT INT TERM
+trap 'rm -f "$PIDFILE"' EXIT
+trap 'exit 0' INT TERM
 
 scan() {
     python3 - "$PORT_START" "$PORT_END" <<'PY'
@@ -82,6 +83,41 @@ state_of() {
     adb devices | awk -v a="127.0.0.1:$1" '$1==a{print $2}'
 }
 
+# Shizuku runs a process as the shell user so apps can use adb-level APIs. Its
+# server dies with the phone, and it is started by an adb command, so restart it
+# whenever adb comes back (and periodically, in case it was killed meanwhile).
+# Optional: everything here is skipped if Shizuku or the starter is missing.
+SHIZUKU=unknown
+
+shizuku_available() {
+    [ "$SHIZUKU" = "1" ] && return 0
+    [ "$SHIZUKU" = "0" ] && return 1
+    command -v start-shizuku >/dev/null 2>&1 || { SHIZUKU=0; return 1; }
+    if adb shell pm path moe.shizuku.privileged.api >/dev/null 2>&1; then
+        SHIZUKU=1
+        return 0
+    fi
+    # Only conclude "not installed" once a plain shell command works, so a
+    # still-starting adbd does not permanently disable the check.
+    adb shell true >/dev/null 2>&1 && SHIZUKU=0
+    return 1
+}
+
+ensure_shizuku() {
+    shizuku_available || return 0
+    if adb shell ps -A 2>/dev/null | grep -q shizuku_server; then
+        return 0
+    fi
+    log "shizuku server is down, starting it"
+    if start-shizuku >/dev/null 2>&1; then
+        log "shizuku server started"
+        return 0
+    fi
+    log "shizuku start failed"
+    return 1
+}
+
+
 # Ports that accept a TCP connection but never speak adb (other apps listening
 # on random ports). Remembered so later rounds skip them.
 BAD=""
@@ -112,6 +148,8 @@ log "watching for wireless debugging (ports $PORT_START-$PORT_END, mdns=$MDNS)"
 last=""
 was_connected=""
 mdns_misses=0
+poll_count=0
+need_shizuku=0
 
 while true; do
     current=$(adb devices | awk '$2=="device"{print $1; exit}')
@@ -122,6 +160,17 @@ while true; do
             was_connected="$current"
             last="${current##*:}"
             mdns_misses=0
+            need_shizuku=1
+        fi
+        # adb can accept the connection a moment before shell commands work, so
+        # a failure here is retried on the next poll instead of being dropped.
+        if [ "$need_shizuku" = "1" ]; then
+            ensure_shizuku && need_shizuku=0
+        else
+            poll_count=$(( poll_count + 1 ))
+            if [ $(( poll_count % 12 )) -eq 0 ]; then
+                ensure_shizuku
+            fi
         fi
         sleep 5
         continue
@@ -136,6 +185,7 @@ while true; do
     if try_port "$last"; then
         log "reconnected on previous port: 127.0.0.1:$last"
         was_connected="127.0.0.1:$last"
+        need_shizuku=1
         continue
     fi
 
@@ -151,6 +201,7 @@ while true; do
                     last="$p"
                     log "reconnected via mdns: 127.0.0.1:$p (found in ${took}s)"
                     was_connected="127.0.0.1:$p"
+                    need_shizuku=1
                     break
                 fi
             done
@@ -176,6 +227,7 @@ while true; do
             last="$p"
             log "reconnected: 127.0.0.1:$p (scan ${took}s)"
             was_connected="127.0.0.1:$p"
+            need_shizuku=1
             break
         fi
     done

@@ -92,6 +92,11 @@ Log: `adb-keepalive.log`
 For start-at-boot, install **Termux:Boot** and place a script in `~/.termux/boot/`
 that waits ~20 s and then execs `adb-keepalive.sh`.
 
+If Shizuku is installed, the keepalive also restarts its shell server after every
+reconnect (and once a minute if it was killed), as long as a `start-shizuku`
+command exists on `PATH`. Shizuku's server must be started by adb after each
+reboot, so this keeps `rish` working without extra steps.
+
 ## How port discovery works
 
 Android's wireless debugging advertises `_adb-tls-connect._tcp` over mDNS itself, and
