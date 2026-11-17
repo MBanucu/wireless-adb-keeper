@@ -1,0 +1,17 @@
+# build output and signing material
+build/
+*.apk
+*.idsig
+debug.keystore
+android.jar
+
+# runtime state
+*.log
+*.pid
+
+# local screenshots and probes
+*.png
+__pycache__/
+
+# local scratch probes
+mdns_probe.py
