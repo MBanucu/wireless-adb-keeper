@@ -86,6 +86,25 @@ public class MainActivity extends Activity {
             }
         }));
 
+        root.addView(button("Pin adb port " + PinnedPort.PORT + " now", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        final String state = PinnedPort.force(MainActivity.this);
+                        handler.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                toast("Pinned port: " + state);
+                                refreshStatus();
+                            }
+                        });
+                    }
+                }).start();
+            }
+        }));
+
         serviceButton = button("Stop monitor service", new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -211,6 +230,11 @@ public class MainActivity extends Activity {
                 + "reconnects silently, even after reboots. It is marked metered so mobile data stays the default route.\n"
                 + "- Local-only mode instead holds the network as a local link that can never carry internet, but "
                 + "Android makes you approve a dialog and needs the password on every reconnect.\n"
+                + "- The fixed port 5555 is kept by Termux's own adb, which is already paired with this "
+                + "phone: when the port is closed the app asks Termux to run "
+                + "wireless-adb-keeper/pin-adb-port.sh, which sends 'adb tcpip 5555'. An app cannot "
+                + "send that command itself. One-time grant: pm grant com.example.wifidebug "
+                + "com.termux.permission.RUN_COMMAND\n"
                 + "- Only devices already paired with this phone can connect. "
                 + "Revoke pairings in Developer options if needed.");
         root.addView(help);
@@ -304,6 +328,7 @@ public class MainActivity extends Activity {
         sb.append("Wi-Fi:       ").append(Ensurer.isWifiConnected(this) ? "connected" : "not connected").append('\n');
         sb.append("Wireless:    ").append(Ensurer.isWirelessDebuggingOn(this) ? "ON" : "OFF").append('\n');
         sb.append("Service:     ").append(MonitorService.running ? "running" : "stopped").append('\n');
+        sb.append("Pin ").append(PinnedPort.PORT).append(":    ").append(PinnedPort.state()).append('\n');
         if (LocalWifi.isAutoMode(this)) {
             sb.append("Connect:     auto-connect (suggestion)");
             if (MonitorService.running && LocalWifi.detail != null && !LocalWifi.detail.isEmpty()) {

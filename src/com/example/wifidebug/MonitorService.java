@@ -27,10 +27,14 @@ public class MonitorService extends Service {
     private static final String CHANNEL_ID = "monitor";
     private static final int NOTIFICATION_ID = 1;
 
+    /** 5555 is cheap to probe, so it is re-checked more often than the 15 min job. */
+    private static final long PIN_CHECK_MS = 60_000L;
+
     private Handler handler;
     private ConnectivityManager.NetworkCallback networkCallback;
     private ContentObserver observer;
     private Runnable ensureRunnable;
+    private Runnable pinTick;
     private String pendingReason = "";
     private LocalWifi localWifi;
 
@@ -45,6 +49,7 @@ public class MonitorService extends Service {
         registerSettingObserver();
         applyMode("service created");
         scheduleEnsure("service created", 0);
+        startPinLoop(8000);
         Log.i(Ensurer.TAG, "MonitorService started");
     }
 
@@ -153,6 +158,10 @@ public class MonitorService extends Service {
             @Override
             public void onAvailable(Network network) {
                 scheduleEnsure("wifi available", 500);
+                // A new network is when adbd comes back with a fresh random
+                // port, and when wireless debugging has to be switched on
+                // again before anything can be pinned.
+                startPinLoop(15000);
                 if (localWifi != null) localWifi.onWifiAvailable();
             }
         };
@@ -196,6 +205,11 @@ public class MonitorService extends Service {
                 ensureRunnable = null;
                 String result = Ensurer.ensure(MonitorService.this);
                 Log.i(Ensurer.TAG, "monitor ensure (" + pendingReason + "): " + result);
+                if (result.startsWith("Enabled")) {
+                    // adbd restarts with the new setting; give it time to listen
+                    // before asking for the fixed port.
+                    startPinLoop(15000);
+                }
             }
         };
         handler.postDelayed(ensureRunnable, delayMs);
@@ -228,9 +242,50 @@ public class MonitorService extends Service {
         return START_STICKY;
     }
 
+    /**
+     * Runs a pin attempt now (or soon) and keeps re-checking the fixed port while
+     * the service lives. The port itself is probed and repaired by PinnedPort;
+     * this only decides how often it is asked to look.
+     */
+    private void startPinLoop(long delayMs) {
+        if (pinTick != null) {
+            handler.removeCallbacks(pinTick);
+        }
+        pinTick = new Runnable() {
+            @Override
+            public void run() {
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        String state = PinnedPort.check(MonitorService.this);
+                        Log.i(Ensurer.TAG, "pin check: " + state);
+                        if (!state.startsWith("listening")) {
+                            // The Termux script needs a few seconds; probe again
+                            // before the long interval so a pin that worked is
+                            // not reported as closed for a whole minute.
+                            try {
+                                Thread.sleep(15_000L);
+                            } catch (InterruptedException ignored) {
+                                return;
+                            }
+                            Log.i(Ensurer.TAG, "pin check: "
+                                    + PinnedPort.check(MonitorService.this));
+                        }
+                    }
+                }).start();
+                handler.postDelayed(pinTick, PIN_CHECK_MS);
+            }
+        };
+        handler.postDelayed(pinTick, delayMs);
+    }
+
     @Override
     public void onDestroy() {
         running = false;
+        if (pinTick != null) {
+            handler.removeCallbacks(pinTick);
+            pinTick = null;
+        }
         if (localWifi != null) {
             localWifi.stop();
             localWifi = null;

@@ -16,7 +16,7 @@
 # Log:    adb-keepalive.log
 
 set -u
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 1
 
 LOG="adb-keepalive.log"
 PORT_START=${PORT_START:-30000}
@@ -122,6 +122,11 @@ ensure_shizuku() {
 # on random ports). Remembered so later rounds skip them.
 BAD=""
 
+# The keeper app pins adbd to 5555 when it can (pin-adb-port.sh). Prefer that
+# port, so this loop re-attaches there instead of hunting for a TLS port that no
+# longer exists. soft=1: a closed 5555 must stay a candidate for later rounds.
+PINNED_PORT=${ADB_PIN_PORT:-5555}
+
 # try_port <port> [soft]
 #   soft=1: authoritative candidate (mDNS), never remembered as bad.
 try_port() {
@@ -179,6 +184,15 @@ while true; do
     if [ -n "$was_connected" ]; then
         log "lost: $was_connected"
         was_connected=""
+    fi
+
+    # 0. The port the keeper app pins adbd to, when it managed to.
+    if try_port "$PINNED_PORT" 1; then
+        log "reconnected on pinned port: 127.0.0.1:$PINNED_PORT"
+        was_connected="127.0.0.1:$PINNED_PORT"
+        last="$PINNED_PORT"
+        need_shizuku=1
+        continue
     fi
 
     # 1. Fast path: a plain Wi-Fi reconnect usually keeps the same port.

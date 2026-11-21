@@ -6,16 +6,28 @@ echo "== cleaning =="
 rm -rf build
 mkdir -p build/classes build/dex
 
+# android.jar is either dropped next to build.sh or taken from the SDK the
+# Termux side already has; platforms are sorted so the newest one wins.
+JAR=android.jar
+if [ ! -f "$JAR" ]; then
+    JAR=$(ls -1 "$HOME"/android-sdk/platforms/*/android.jar 2>/dev/null | tail -1)
+fi
+if [ -z "${JAR:-}" ] || [ ! -f "$JAR" ]; then
+    echo "android.jar not found (put it next to build.sh or under ~/android-sdk/platforms/)" >&2
+    exit 1
+fi
+echo "== using $JAR =="
+
 echo "== compiling =="
-javac -source 8 -target 8 -cp android.jar -d build/classes \
+javac -source 8 -target 8 -cp "$JAR" -d build/classes \
     $(find src -name '*.java')
 
 echo "== dexing =="
-d8 --min-api 24 --lib android.jar --output build/dex \
+d8 --min-api 24 --lib "$JAR" --output build/dex \
     $(find build/classes -name '*.class')
 
 echo "== packaging =="
-aapt package -f -M AndroidManifest.xml -I android.jar -F build/app-unsigned.apk
+aapt package -f -M AndroidManifest.xml -I "$JAR" -F build/app-unsigned.apk
 (cd build/dex && aapt add ../app-unsigned.apk classes.dex)
 
 if [ ! -f debug.keystore ]; then

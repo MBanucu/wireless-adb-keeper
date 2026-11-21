@@ -10,6 +10,10 @@ public class EnsureJobService extends JobService {
             @Override
             public void run() {
                 Ensurer.ensure(EnsureJobService.this);
+                // Fallback for a phone whose monitor service was killed. A job
+                // runs in the background, so asking Termux may be refused (the
+                // monitor service is the place that can); PinnedPort logs it.
+                PinnedPort.check(EnsureJobService.this);
                 jobFinished(params, false);
             }
         }).start();
