@@ -55,6 +55,27 @@ Neither half can be solved by the app alone:
   Needs `pip install zeroconf`; without it the keepalive falls back to scanning.
 - `reconnect.sh` / `wait_adb.sh` — one-shot reconnect and a bounded "wait for adbd to
   appear" helper, useful after rebooting the phone.
+- `reboot-unlock.sh` — restarts the phone and unlocks the keyguard as soon as boot
+  finishes, so a dev loop does not wait for a human to pick it up.
+
+## Reboot and unlock
+
+```bash
+PHONE_PIN=1234 ./reboot-unlock.sh --reboot      # reboot, wait for boot, unlock
+./reboot-unlock.sh --boot-only                  # wait for boot, stay locked
+```
+
+Boot completion is waited for with **one** adb round trip: the polling loop runs on
+ the phone (`while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 0.1; done`),
+so the cost is 100 ms granularity rather than an adb call per tick. After that the
+script wakes the screen, dismisses the keyguard and types the PIN, retrying until
+`dumpsys user` reports `RUNNING_UNLOCKED`. Measured on this phone: adbd back at
+t+44 s, `sys.boot_completed` at t+52 s, unlocked at t+55 s.
+
+It also matters for apps that start at boot: `LOCKED_BOOT_COMPLETED` is withheld
+from third-party apps by the vendor's autostart policy on this device, but a
+`BOOT_COMPLETED` fires the moment the user is unlocked — so unlocking from the
+laptop is what makes an app like the proxy come back without a human present.
 
 ## Requirements
 
