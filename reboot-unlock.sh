@@ -106,38 +106,6 @@ if [ "$BOOT_ONLY" = 1 ]; then
     exit 0
 fi
 
-is_unlocked() { d shell dumpsys user 2>/dev/null | grep -q 'State: RUNNING_UNLOCKED'; }
-
-# Swipe up from three quarters of the screen to a sixth: works on any size.
-size=$(d shell wm size 2>/dev/null | awk -F': ' '/Physical size/ { print $2 }' | tr -d '\r')
-width=${size%x*}
-height=${size#*x}
-if [ -z "${width:-}" ] || [ -z "${height:-}" ] || [ "$width" = "$size" ]; then
-    width=1080
-    height=2400
-fi
-x=$(( width / 2 ))
-y_from=$(( height * 3 / 4 ))
-y_to=$(( height / 6 ))
-
-attempt=0
-while ! is_unlocked; do
-    attempt=$(( attempt + 1 ))
-    if [ "$(remaining)" -le 0 ] || [ "$attempt" -gt 15 ]; then
-        echo "timeout: still locked after $attempt attempts" >&2
-        exit 1
-    fi
-    d shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1
-    d shell wm dismiss-keyguard >/dev/null 2>&1
-    is_unlocked && break
-    d shell input swipe "$x" "$y_from" "$x" "$y_to" 120 >/dev/null 2>&1
-    sleep 0.3
-    d shell input text "$PIN" >/dev/null 2>&1
-    d shell input keyevent 66 >/dev/null 2>&1
-    for _ in 1 2 3 4 5 6; do
-        is_unlocked && break
-        sleep 0.25
-    done
-done
-
-say "unlocked"
+# The unlock itself lives in unlock.sh, so it can be run without a reboot too.
+PHONE_SERIAL=$SERIAL exec "$(dirname "$0")/unlock.sh" \
+    --pin "$PIN" --timeout "$(remaining)"
