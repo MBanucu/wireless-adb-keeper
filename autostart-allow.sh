@@ -138,17 +138,29 @@ tap_at() { d shell input tap "$1" "$2"; }
 scroll_down() { d shell input swipe 720 2500 720 1100 250; }
 scroll_up() { d shell input swipe 720 1100 720 2500 250; }
 
+# Waits for a labelled node to appear, then leaves its centre in $coords.
+wait_node() {
+    local want=$1 i
+    for i in $(seq 1 12); do
+        hierarchy
+        if coords=$(ask node "$want" 2>/dev/null); then
+            return 0
+        fi
+        sleep 0.5
+    done
+    return 1
+}
+
 open_screen() {
+    # Start from the app's home screen: a resumed screen would not show the
+    # entry point the script taps first.
+    d shell am force-stop com.blackview.systemmanager >/dev/null 2>&1
     d shell am start -n com.blackview.systemmanager/.MainActivity >/dev/null 2>&1
-    sleep 2
-    hierarchy
-    coords=$(ask node "App Management") || { echo "cannot find App Management" >&2; exit 1; }
+    wait_node "App Management" || { echo "cannot find App Management" >&2; exit 1; }
     tap_at $coords
-    sleep 2
-    hierarchy
-    coords=$(ask node "Auto Start Management") || { echo "cannot find Auto Start Management" >&2; exit 1; }
+    wait_node "Auto Start Management" || { echo "cannot find Auto Start Management" >&2; exit 1; }
     tap_at $coords
-    sleep 2
+    sleep 1.5
 }
 
 open_screen
