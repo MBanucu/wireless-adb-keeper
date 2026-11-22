@@ -44,7 +44,14 @@ public class MonitorService extends Service {
         running = true;
         handler = new Handler(Looper.getMainLooper());
         createChannel();
-        startForeground(NOTIFICATION_ID, buildNotification());
+        // From targetSdk 34 the type has to be passed here as well as declared
+        // in the manifest, or the start is refused outright.
+        if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(NOTIFICATION_ID, buildNotification(),
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+        } else {
+            startForeground(NOTIFICATION_ID, buildNotification());
+        }
         registerNetworkCallback();
         registerSettingObserver();
         applyMode("service created");

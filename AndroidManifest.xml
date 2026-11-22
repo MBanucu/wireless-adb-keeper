@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.example.wifidebug"
-    android:versionCode="7"
-    android:versionName="1.6">
+    android:versionCode="8"
+    android:versionName="1.7">
 
-    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="28" />
+    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="35" />
 
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
     <!-- Probing 127.0.0.1:5555 needs a socket; without INTERNET even loopback
@@ -17,6 +17,9 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Android 14+ requires a type for every foreground service; the monitor
+         is a specialUse one, and specialUse needs no runtime permission. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Lets the app ask Termux (whose adb is the paired client) to run the
          script that sends `adb tcpip 5555`; granted once with pm grant. -->
@@ -57,7 +60,12 @@
 
         <service
             android:name=".MonitorService"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="keeps wireless debugging reachable for the paired laptop" />
+        </service>
 
         <service
             android:name=".EnsureJobService"
