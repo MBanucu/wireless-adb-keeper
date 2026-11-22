@@ -109,6 +109,13 @@ update as a signature mismatch (an uninstall also clears the app's saved setting
 ## Install
 
 ```bash
+PHONE_SERIAL=192.168.77.232:5555 ./install.sh     # or just ./install.sh
+```
+
+`install.sh` does the install and then the four grants, because a reinstall
+silently drops them:
+
+```bash
 adb install -r wifidebug.apk
 adb shell pm grant com.example.wifidebug android.permission.WRITE_SECURE_SETTINGS
 adb shell pm grant com.example.wifidebug android.permission.ACCESS_FINE_LOCATION
@@ -118,7 +125,10 @@ adb shell pm grant com.example.wifidebug com.termux.permission.RUN_COMMAND
 
 The `RUN_COMMAND` grant is only needed for the fixed port (see below), and only
 works once the installed APK declares it — granting it to an older build is a
-silent no-op.
+silent no-op. Losing it does not break anything loudly: the app keeps running and
+keeps logging, and only `pin check: closed (grant com.termux.permission.RUN_COMMAND)`
+in logcat says why the port never comes back — which is exactly the situation in
+which there is no cable to fix it with. Hence the script.
 
 Open the app, enter the Wi-Fi SSID and password, tap **Save**, then **Connect now** and
 approve the "available networks" notification once. Leave **Connect mode** on
