@@ -55,14 +55,16 @@ Neither half can be solved by the app alone:
   Needs `pip install zeroconf`; without it the keepalive falls back to scanning.
 - `reconnect.sh` / `wait_adb.sh` — one-shot reconnect and a bounded "wait for adbd to
   appear" helper, useful after rebooting the phone.
-- `reboot-unlock.sh` — restarts the phone and unlocks the keyguard as soon as boot
-  finishes, so a dev loop does not wait for a human to pick it up.
+- Reboot/unlock and the autostart toggler live in the sibling `phone-link-tools`
+  repository: `reboot.sh` waits for the new boot, `unlock.sh` clears the keyguard.
 
 ## Reboot and unlock
 
 ```bash
-PHONE_PIN=1234 ./reboot-unlock.sh --reboot      # reboot, wait for boot, unlock
-./reboot-unlock.sh --boot-only                  # wait for boot, stay locked
+../phone-link-tools/reboot.sh                   # reboot, return after a new boot id
+../phone-link-tools/unlock.sh --pin 1234        # clear the keyguard
+../phone-link-tools/unlock.sh --check           # print the lock state only
+PHONE_PIN=1234 ../phone-link-tools/unlock.sh    # or take the PIN from the env
 ```
 
 Boot completion is waited for with **one** adb round trip: the polling loop runs on
@@ -72,10 +74,13 @@ script wakes the screen, dismisses the keyguard and types the PIN, retrying unti
 `dumpsys user` reports `RUNNING_UNLOCKED`. Measured on this phone: adbd back at
 t+44 s, `sys.boot_completed` at t+52 s, unlocked at t+55 s.
 
-It also matters for apps that start at boot: `LOCKED_BOOT_COMPLETED` is withheld
-from third-party apps by the vendor's autostart policy on this device, but a
-`BOOT_COMPLETED` fires the moment the user is unlocked — so unlocking from the
-laptop is what makes an app like the proxy come back without a human present.
+It also matters for apps that start at boot. `LOCKED_BOOT_COMPLETED` *is*
+delivered on this device — the earlier note here blamed the vendor's autostart
+policy and was wrong. What a package needs is `RECEIVE_BOOT_COMPLETED`, and
+`android:directBootAware="true"` written on the receiver itself: DokeOS does not
+inherit it from `<application>`, so the broadcast resolves no component and the
+process never starts. With both in place the proxy listens before the first
+unlock; unlocking is then only needed for the laptop's own uplink.
 
 ## Requirements
 

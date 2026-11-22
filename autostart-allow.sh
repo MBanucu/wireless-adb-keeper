@@ -7,7 +7,7 @@
 # DokeOS keeps the list in System Manager behind a signature permission
 # (com.freeme.freemanager.permission.ACCESS_INTERFACE), so neither adb nor an
 # ordinary app can write it; this drives the screen with uiautomator instead.
-# The phone must be unlocked (unlock.sh --check says whether it is).
+# The phone must be unlocked (../phone-link-tools/unlock.sh --check says so).
 #
 # Exit status: 0 allowed (or already), 1 not found/failed, 2 usage.
 set -uo pipefail
@@ -25,6 +25,7 @@ usage() {
 while [ $# -gt 0 ]; do
     case "$1" in
         --list) MODE=list ;;
+        --off) MODE=off ;;
         --serial) SERIAL=${2:-}; shift ;;
         -h|--help) usage ;;
         -*) echo "unknown option: $1" >&2; usage ;;
@@ -202,6 +203,21 @@ if [ "$found" = 0 ]; then
 fi
 if [ "$found" = 0 ]; then
     echo "no app matching \"$TARGET\" in the list" >&2
+    exit 1
+fi
+
+if [ "$MODE" = off ]; then
+    if [ "$state" = "false" ]; then
+        echo "$TARGET is already off"
+        exit 0
+    fi
+    coords=$(ask switch "$TARGET") || { echo "the row has no switch" >&2; exit 1; }
+    tap_at $coords
+    sleep 2
+    hierarchy
+    state=$(ask state "$TARGET" 2>/dev/null) || { echo "cannot re-read the row" >&2; exit 1; }
+    [ "$state" = "false" ] && { echo "$TARGET is off"; exit 0; }
+    echo "$TARGET is still on" >&2
     exit 1
 fi
 
