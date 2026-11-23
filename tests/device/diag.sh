@@ -43,7 +43,7 @@ direct=$(content_call --method diag | strip_envelope)
 # can change between two consecutive readers. The configuration and
 # permission fields must not.
 normalize_diag() {
-    grep -v -E '^(uptime_s|port_5555|pin_result|wifi_result|last_result|journal_events|journal_bytes)=' \
+    grep -v -E '^(uptime_s|port_5555|pin_result|wifi_result|last_result|verbose|journal_events|journal_bytes)=' \
         || true
 }
 diff_out=$(diff -u \

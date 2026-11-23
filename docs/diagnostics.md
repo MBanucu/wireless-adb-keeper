@@ -20,6 +20,7 @@ fields around it.
 | `unlocked` | whether credential-protected storage is readable |
 | `mode` | `auto` or `local` (saved connect mode) |
 | `service` | monitor foreground service: `running` or `stopped` |
+| `verbose` | the opt-in verbose window: `off`, or the minutes and events left |
 | `adb_wifi_enabled` | the `adb_wifi_enabled` global setting |
 | `dev_settings` | the `development_settings_enabled` global setting |
 | `wifi_connected` | whether any Wi-Fi transport is connected |
@@ -58,6 +59,26 @@ Auto-connect keeps one applied record per profile in the encrypted slot
 were actually handed to Android, which is what Android 10 needs for an exact
 removal. An upgrade moves the old single slot to the first profile, so the same
 network is not registered twice.
+
+## Verbose logging
+
+The **Verbose logging** switch on the Diagnostics page is off by default. It
+lives in device-protected prefs (`diag_verbose`), so a tick before the first
+unlock can already read it and the choice survives a reboot. While it is on, the
+page shows a note and the journal also records the high-frequency paths that are
+otherwise silent:
+
+- every pin probe, with the port state, the Termux state and what the probe did
+  (`diag.verbose.pin`);
+- every observed settings change (`diag.verbose.observer`);
+- every network callback transition, including the local-only link
+  (`diag.verbose.network`);
+- every notification update (`diag.verbose.notification`).
+
+The window is bounded to one hour or 200 events, whichever comes first. When it
+ends, `diag.verbose.expired` is written once and the window switches itself off;
+a report therefore shows exactly where the noisy part stopped. With verbose off,
+none of the four codes above is written, so the journal behaves as before.
 
 ## Reason codes
 
@@ -132,6 +153,13 @@ ring buffer, and never contains a passphrase, control token or pairing code.
 | `key.verify_untrusted` | warn | adbd does not trust this key; pair again |
 | `key.verify_failed` | error | the trusted-shell test failed for another reason |
 | `mode.invalid` | warn | `mode` must be `auto` or `local` |
+| `diag.verbose.on` | info | the verbose window was opened from the Diagnostics page (one hour / 200 events) |
+| `diag.verbose.off` | info | the verbose window was closed from the Diagnostics page |
+| `diag.verbose.expired` | info | the window reached one hour or 200 events; verbose switched itself off (exactly one entry) |
+| `diag.verbose.pin` | info | verbose only: one per pin probe, with port state, Termux state and action |
+| `diag.verbose.observer` | info | verbose only: one per observed settings change |
+| `diag.verbose.network` | info | verbose only: one per network callback transition |
+| `diag.verbose.notification` | info | verbose only: one per notification update |
 
 ## Secret canaries
 
