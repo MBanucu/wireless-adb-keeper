@@ -274,8 +274,13 @@ public final class LocalWifi {
 
         String pass = passphrase(context);
         if (pass == null) {
-            journal("warn", "wifi.secret.undecryptable",
-                    "the saved passphrase cannot be decrypted; save it again");
+            // Null means the Keystore could not decrypt a stored secret; an
+            // absent secret is the empty string. Do not turn that failure into
+            // an open-network request for a network that needs a password.
+            state = "error";
+            detail = "saved passphrase cannot be decrypted; save it again";
+            journal("warn", "wifi.secret.undecryptable", detail);
+            return;
         }
         cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
         if (cm == null) {
