@@ -20,6 +20,7 @@ import java.security.cert.X509Certificate;
 import java.security.interfaces.RSAPrivateCrtKey;
 import java.security.spec.RSAPublicKeySpec;
 import java.text.SimpleDateFormat;
+import java.util.Calendar;
 import java.util.Date;
 import java.util.Locale;
 import java.util.TimeZone;
@@ -57,6 +58,7 @@ public final class AdbCertificate {
     private static final int TAG_OID = 0x06;
     private static final int TAG_UTF8 = 0x0C;
     private static final int TAG_UTC_TIME = 0x17;
+    private static final int TAG_GENERALIZED_TIME = 0x18;
     private static final int TAG_BOOLEAN = 0x01;
     private static final int TAG_VERSION = 0xA0;
     private static final int TAG_EXTENSIONS = 0xA3;
@@ -157,6 +159,11 @@ public final class AdbCertificate {
 
     /** Builds, signs and re-reads the certificate; the re-read is the check. */
     static byte[] generate(PrivateKey privateKey, PublicKey publicKey) throws IOException {
+        return generate(privateKey, publicKey, System.currentTimeMillis());
+    }
+
+    /** As above, with an explicit clock so the host probe can reach 2050. */
+    static byte[] generate(PrivateKey privateKey, PublicKey publicKey, long now) throws IOException {
         try {
             byte[] serialBytes = new byte[8];
             new SecureRandom().nextBytes(serialBytes);
@@ -169,12 +176,11 @@ public final class AdbCertificate {
                     der(TAG_SET, der(TAG_SEQUENCE,
                             oid(2, 5, 4, 3), der(TAG_UTF8, SUBJECT.getBytes(UTF_8)))));
 
-            // A year back avoids "not yet valid" on a clock that drifted; 20
+            // A day back avoids "not yet valid" on a clock that drifted; 20
             // years forward keeps the file out of the way of any renewal logic.
-            long now = System.currentTimeMillis();
             byte[] validity = der(TAG_SEQUENCE,
-                    utcTime(new Date(now - 24L * 60 * 60 * 1000)),
-                    utcTime(new Date(now + 20L * 365 * 24 * 60 * 60 * 1000)));
+                    time(new Date(now - 24L * 60 * 60 * 1000)),
+                    time(new Date(now + 20L * 365 * 24 * 60 * 60 * 1000)));
 
             byte[] extensions = der(TAG_EXTENSIONS, der(TAG_SEQUENCE,
                     extension(oid(2, 5, 29, 19), true, der(TAG_SEQUENCE)),
@@ -218,10 +224,25 @@ public final class AdbCertificate {
                 : der(TAG_SEQUENCE, oid, der(TAG_OCTET_STRING, value));
     }
 
-    private static byte[] utcTime(Date date) {
-        SimpleDateFormat format = new SimpleDateFormat("yyMMddHHmmss'Z'", Locale.US);
+    /**
+     * Encodes a validity endpoint with the tag DER requires for its year.
+     *
+     * UTCTime is a two-digit year defined only for 1950-2049, so a 20-year
+     * notAfter crosses out of it in 2030. GeneralizedTime carries four digits
+     * and is valid outside that range, so the tag is picked per value instead
+     * of shortening the window: the long validity is what keeps renewal out of
+     * the pairing path, and both tags are legal in a v3 certificate.
+     */
+    private static byte[] time(Date date) {
+        Calendar calendar = Calendar.getInstance(TimeZone.getTimeZone("GMT"), Locale.US);
+        calendar.setTime(date);
+        int year = calendar.get(Calendar.YEAR);
+        boolean generalized = year < 1950 || year > 2049;
+        SimpleDateFormat format = new SimpleDateFormat(
+                generalized ? "yyyyMMddHHmmss'Z'" : "yyMMddHHmmss'Z'", Locale.US);
         format.setTimeZone(TimeZone.getTimeZone("GMT"));
-        return der(TAG_UTC_TIME, format.format(date).getBytes(UTF_8));
+        return der(generalized ? TAG_GENERALIZED_TIME : TAG_UTC_TIME,
+                format.format(date).getBytes(UTF_8));
     }
 
     static PublicKey publicKeyOf(PrivateKey privateKey) throws IOException {
