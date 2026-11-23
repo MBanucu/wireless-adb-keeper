@@ -170,14 +170,14 @@ public class MonitorService extends Service {
                 localWifi.stop();
                 localWifi = null;
             }
-            int status = WifiSuggestion.add(this);
+            SuggestionRegistry.Outcome outcome = WifiSuggestion.addAll(this);
             LocalWifi.state = "auto";
-            LocalWifi.detail = suggestionDetail(status);
+            LocalWifi.detail = outcome.detail();
             Log.i(Ensurer.TAG, "mode auto (" + reason + "): " + LocalWifi.detail);
             Diag.info(this, "svc.mode", reason + ": auto-connect, " + LocalWifi.detail
-                    + " (status " + status + ")");
+                    + " (status " + outcome.status() + ")");
         } else {
-            WifiSuggestion.remove(this);
+            WifiSuggestion.removeAll(this);
             if (localWifi == null) {
                 startLocalWifi();
             } else {
@@ -199,15 +199,6 @@ public class MonitorService extends Service {
             }
         });
         localWifi.start();
-    }
-
-    private static String suggestionDetail(int status) {
-        if (status == WifiSuggestion.STATUS_SUCCESS) return "suggestion active";
-        if (status == -1) return "no Wi-Fi service";
-        if (status == -2) return "enter Wi-Fi password";
-        if (status == -3) return "could not build suggestion";
-        if (status == -4) return "suggestion request failed";
-        return "suggestion status " + status;
     }
 
     private void createChannel() {
@@ -356,12 +347,12 @@ public class MonitorService extends Service {
             applyMode("settings changed");
         } else if (ACTION_CONNECT_LOCAL.equals(action) && unlocked) {
             if (LocalWifi.isAutoMode(this)) {
-                int status = WifiSuggestion.add(this);
+                SuggestionRegistry.Outcome outcome = WifiSuggestion.addAll(this);
                 LocalWifi.state = "auto";
-                LocalWifi.detail = suggestionDetail(status);
+                LocalWifi.detail = outcome.detail();
                 Log.i(Ensurer.TAG, "mode auto (connect now): " + LocalWifi.detail);
                 Diag.info(this, "svc.connect", "auto-connect, " + LocalWifi.detail
-                        + " (status " + status + ")");
+                        + " (status " + outcome.status() + ")");
                 updateNotification();
             } else if (localWifi != null) {
                 localWifi.retryNow();
