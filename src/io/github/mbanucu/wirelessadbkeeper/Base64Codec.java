@@ -3,11 +3,9 @@ package io.github.mbanucu.wirelessadbkeeper;
 /**
  * The small part of Base64 that ADB key handling needs.
  *
- * <p>Deliberately not {@code java.util.Base64}: that class is API 26, while the
- * manifest still declares {@code minSdk 24}, and {@link AdbKey} is reachable
- * from {@code keeper.sh pubkey} on every supported device. {@code
- * android.util.Base64} would fix the API level but would make the host-side
- * probes depend on Android, so the codec is kept here as plain Java.
+ * <p>Deliberately not {@code java.util.Base64} or {@code android.util.Base64}:
+ * {@link AdbKey} is also exercised by the host-side probes in {@code tools/},
+ * which compile and run as plain Java, so this codec stays plain Java too.
  *
  * <p>Standard alphabet, padding required. Decoding rejects anything that is not
  * a whole number of four-character groups; that is enough validation for key
