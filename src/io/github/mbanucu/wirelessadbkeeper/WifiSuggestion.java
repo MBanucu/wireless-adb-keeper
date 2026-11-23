@@ -1,15 +1,16 @@
 package io.github.mbanucu.wirelessadbkeeper;
 
 import android.content.Context;
+import android.content.pm.PackageManager;
+import android.net.wifi.ScanResult;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiNetworkSuggestion;
 import android.os.Build;
 import android.util.Log;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Silent auto-connect via WifiNetworkSuggestion.
@@ -26,9 +27,17 @@ public final class WifiSuggestion {
 
     public static final int STATUS_SUCCESS = 0;
     private static final String PREFS = "wifi_suggestion";
-    private static final String KEY_APPLIED = "applied_sha256";
-    /** Pre-upgrade builds stored `ssid + "\0" + passphrase` under this key. */
+    /** Pre-upgrade builds wrote ssid\0pass, and later ssid\0security\0pass, here. */
     private static final String KEY_LEGACY_APPLIED = "applied";
+    /** Hash-only key from the interim build; it cannot rebuild a suggestion. */
+    private static final String KEY_HASH_APPLIED = "applied_sha256";
+    /** Encrypted in PassphraseStore, never in this prefs file. */
+    private static final String SLOT_APPLIED = "wifi_suggestion_applied";
+
+    private static final String SEC_WPA2 = "wpa2";
+    private static final String SEC_WPA3 = "wpa3";
+    private static final String SEC_OWE = "owe";
+    private static final String SEC_OPEN = "open";
 
     private WifiSuggestion() {
     }
@@ -38,21 +47,35 @@ public final class WifiSuggestion {
     }
 
     public static int add(Context c) {
-        dropLegacyApplied(c);
+        String applied = appliedRecord(c);
         WifiManager wm = manager(c);
         if (wm == null) return -1;
 
         String ssid = LocalWifi.ssid(c);
         String pass = LocalWifi.passphrase(c);
-        if (pass == null || pass.isEmpty()) {
-            Log.w(Ensurer.TAG, "wifi suggestion: no password stored");
+        // A suggestion has to carry the network's security, and auto-connect
+        // needs a passphrase for anything that is not open. Only the scan can
+        // tell us which, so without one we keep the old WPA2 + password path.
+        String scanned = scannedSecurity(c, ssid);
+        String security;
+        if (SEC_OPEN.equals(scanned)) {
+            security = SEC_OPEN;
+        } else if (SEC_OWE.equals(scanned)) {
+            security = SEC_OWE;
+        } else if (pass == null || pass.isEmpty()) {
+            Log.w(Ensurer.TAG, "wifi suggestion: no password stored for " + ssid);
             return -2;
+        } else {
+            // A WPA3-only AP rejects a WPA2 passphrase; a WPA2/WPA3 transition
+            // AP advertises both and also accepts WPA2.
+            security = SEC_WPA3.equals(scanned) ? SEC_WPA3 : SEC_WPA2;
         }
+        // Open and OWE APs need no secret, even if a stale one is still stored.
+        String secret = (SEC_OPEN.equals(security) || SEC_OWE.equals(security)) ? "" : pass;
 
         // Re-adding an identical suggestion makes Android drop the network for a
         // moment, so only rewrite it when the configuration actually changed.
-        String wanted = fingerprint(ssid, pass);
-        String applied = prefs(c).getString(KEY_APPLIED, "");
+        String wanted = record(ssid, security, secret);
         if (wanted.equals(applied) && count(c) > 0) {
             Log.i(Ensurer.TAG, "wifi suggestion already present for " + ssid);
             return STATUS_SUCCESS;
@@ -62,7 +85,7 @@ public final class WifiSuggestion {
 
         WifiNetworkSuggestion suggestion;
         try {
-            suggestion = suggest(ssid, pass);
+            suggestion = suggest(ssid, security, secret);
         } catch (Exception e) {
             Log.e(Ensurer.TAG, "wifi suggestion: build failed", e);
             return -3;
@@ -70,9 +93,11 @@ public final class WifiSuggestion {
 
         try {
             int status = wm.addNetworkSuggestions(Collections.singletonList(suggestion));
-            Log.i(Ensurer.TAG, "wifi suggestion added for " + ssid + ": status " + status);
-            if (status == STATUS_SUCCESS) {
-                prefs(c).edit().putString(KEY_APPLIED, wanted).apply();
+            Log.i(Ensurer.TAG, "wifi suggestion added for " + ssid + " (" + security
+                    + "): status " + status);
+            if (status == STATUS_SUCCESS
+                    && !PassphraseStore.putSecret(c, SLOT_APPLIED, wanted)) {
+                Log.w(Ensurer.TAG, "wifi suggestion: could not encrypt applied record");
             }
             return status;
         } catch (Exception e) {
@@ -82,12 +107,14 @@ public final class WifiSuggestion {
     }
 
     public static void remove(Context c) {
-        dropLegacyApplied(c);
+        // Read the record before clearing it: on Android 10 this is the only
+        // description of the suggestion Android actually holds.
+        String applied = appliedRecord(c);
         WifiManager wm = manager(c);
         if (wm == null) return;
-        prefs(c).edit().remove(KEY_APPLIED).apply();
+        PassphraseStore.clearSecret(c, SLOT_APPLIED);
         try {
-            List<WifiNetworkSuggestion> existing = registered(c, wm);
+            List<WifiNetworkSuggestion> existing = registered(wm, applied);
             if (existing != null && !existing.isEmpty()) {
                 wm.removeNetworkSuggestions(existing);
                 Log.i(Ensurer.TAG, "wifi suggestions removed: " + existing.size());
@@ -98,14 +125,51 @@ public final class WifiSuggestion {
     }
 
     public static int count(Context c) {
+        String applied = appliedRecord(c);
         WifiManager wm = manager(c);
         if (wm == null) return -1;
         try {
-            List<WifiNetworkSuggestion> existing = registered(c, wm);
+            List<WifiNetworkSuggestion> existing = registered(wm, applied);
             return existing == null ? 0 : existing.size();
         } catch (Exception e) {
             return -1;
         }
+    }
+
+    /**
+     * The applied credentials, encrypted at rest, or "" when none was recorded.
+     *
+     * Pre-upgrade builds kept this in plaintext in the suggestion prefs, first
+     * as `ssid \0 pass` and then as `ssid \0 security \0 pass`. The first touch
+     * migrates whichever shape is found into PassphraseStore and deletes the
+     * plaintext copy. The hash-only record from the interim build is deleted
+     * too: it cannot rebuild a suggestion.
+     */
+    private static String appliedRecord(Context c) {
+        String stored = PassphraseStore.getSecret(c, SLOT_APPLIED);
+        if (stored == null) stored = "";
+        android.content.SharedPreferences store = prefs(c);
+        String legacy = store.getString(KEY_LEGACY_APPLIED, null);
+        if (legacy != null) {
+            if (stored.isEmpty()) {
+                String migrated = normalizeLegacy(legacy);
+                if (!migrated.isEmpty()
+                        && PassphraseStore.putSecret(c, SLOT_APPLIED, migrated)) {
+                    stored = migrated;
+                    Log.i(Ensurer.TAG, "wifi suggestion: migrated applied record");
+                } else {
+                    Log.w(Ensurer.TAG, "wifi suggestion: could not migrate applied record");
+                }
+            }
+            // Never leave the plaintext copy behind, even if encryption failed:
+            // the Keystore is also what the passphrase needs, so without it the
+            // record cannot be rebuilt anyway.
+            store.edit().remove(KEY_LEGACY_APPLIED).apply();
+        }
+        if (store.contains(KEY_HASH_APPLIED)) {
+            store.edit().remove(KEY_HASH_APPLIED).apply();
+        }
+        return stored;
     }
 
     /**
@@ -114,57 +178,116 @@ public final class WifiSuggestion {
      * `getNetworkSuggestions` only exists from Android 11, and on Android 10 it
      * is a `NoSuchMethodError`, not an exception the callers below would catch.
      * That version can only remove a suggestion by handing back an identical
-     * object, so the one this app would have added is rebuilt from the stored
-     * credentials instead.
+     * object, so it is rebuilt from the record of what was actually added
+     * (`applied`), not from the current form values: after a password change
+     * those no longer match the suggestion Android holds. An empty record means
+     * nothing was added, so `count()` reports 0 instead of claiming a
+     * suggestion exists merely because a passphrase is stored.
      */
-    private static List<WifiNetworkSuggestion> registered(Context c, WifiManager wm) {
+    private static List<WifiNetworkSuggestion> registered(WifiManager wm, String applied) {
         if (Build.VERSION.SDK_INT >= 30) {
             return wm.getNetworkSuggestions();
         }
-        String pass = LocalWifi.passphrase(c);
-        if (pass == null || pass.isEmpty()) {
+        WifiNetworkSuggestion previous = fromRecord(applied);
+        if (previous == null) {
             return Collections.emptyList();
         }
-        return Collections.singletonList(suggest(LocalWifi.ssid(c), pass));
+        return Collections.singletonList(previous);
     }
 
-    /**
-     * Identifies the applied credentials without keeping a second copy of the
-     * secret. The SSID plus a SHA-256 of the passphrase is enough to notice a
-     * change; a hash cannot be turned back into the passphrase.
-     */
-    private static String fingerprint(String ssid, String pass) {
-        try {
-            MessageDigest sha = MessageDigest.getInstance("SHA-256");
-            byte[] digest = sha.digest(pass.getBytes(StandardCharsets.UTF_8));
-            return ssid + "\u0000" + Base64Codec.encode(digest);
-        } catch (Exception e) {
-            // SHA-256 always exists on Android; if it somehow does not, fall
-            // back to the SSID alone and let the next pass re-add the network.
-            Log.e(Ensurer.TAG, "wifi suggestion: no SHA-256 for change check", e);
-            return ssid + "\u0000unavailable";
+    /** `ssid \0 security \0 passphrase`: the record sealed in PassphraseStore. */
+    private static String record(String ssid, String security, String pass) {
+        return ssid + "\u0000" + security + "\u0000" + pass;
+    }
+
+    /** Rewrites a legacy plaintext record in the current shape. */
+    private static String normalizeLegacy(String legacy) {
+        if (legacy == null || legacy.isEmpty()) return "";
+        int first = legacy.indexOf('\u0000');
+        if (first < 0) return "";
+        int second = legacy.indexOf('\u0000', first + 1);
+        String ssid = legacy.substring(0, first);
+        if (second < 0) {
+            // The original shape had no security field and was always WPA2.
+            return record(ssid, SEC_WPA2, legacy.substring(first + 1));
         }
-    }
-
-    /**
-     * Pre-upgrade builds stored `ssid + "\0" + passphrase` under
-     * {@link #KEY_LEGACY_APPLIED}. Remove that plaintext copy as soon as any
-     * code path touches the suggestion; the suggestion is then re-added once
-     * under the hash-only key.
-     */
-    private static void dropLegacyApplied(Context c) {
-        if (prefs(c).contains(KEY_LEGACY_APPLIED)) {
-            prefs(c).edit().remove(KEY_LEGACY_APPLIED).apply();
-            Log.i(Ensurer.TAG, "wifi suggestion: removed legacy plaintext record");
+        String security = legacy.substring(first + 1, second);
+        if (!SEC_WPA2.equals(security) && !SEC_WPA3.equals(security)
+                && !SEC_OWE.equals(security) && !SEC_OPEN.equals(security)) {
+            security = SEC_WPA2;
         }
+        return record(ssid, security, legacy.substring(second + 1));
     }
 
-    private static WifiNetworkSuggestion suggest(String ssid, String pass) {
-        return new WifiNetworkSuggestion.Builder()
+    private static WifiNetworkSuggestion fromRecord(String record) {
+        if (record == null || record.isEmpty()) return null;
+        int first = record.indexOf('\u0000');
+        if (first < 0) return null;
+        int second = record.indexOf('\u0000', first + 1);
+        if (second < 0) {
+            // Records written before the security field existed were always WPA2.
+            return suggest(record.substring(0, first), SEC_WPA2, record.substring(first + 1));
+        }
+        return suggest(record.substring(0, first), record.substring(first + 1, second),
+                record.substring(second + 1));
+    }
+
+    private static WifiNetworkSuggestion suggest(String ssid, String security, String pass) {
+        WifiNetworkSuggestion.Builder builder = new WifiNetworkSuggestion.Builder()
                 .setSsid(ssid)
-                .setWpa2Passphrase(pass)
-                .setIsMetered(true)
-                .build();
+                .setIsMetered(true);
+        if (SEC_OPEN.equals(security)) {
+            // No passphrase: an open AP has nothing to authenticate with.
+        } else if (SEC_OWE.equals(security)) {
+            // OWE is encrypted but unauthenticated; it still takes no passphrase.
+            builder.setIsEnhancedOpen(true);
+        } else if (SEC_WPA3.equals(security)) {
+            builder.setWpa3Passphrase(pass);
+        } else {
+            builder.setWpa2Passphrase(pass);
+        }
+        return builder.build();
+    }
+
+    /**
+     * What the scan says about this AP, or null when it cannot be read (no
+     * Location grant, Wi-Fi off, or the AP is not in the cached results).
+     * WPA3-only means SAE without PSK; a transition AP advertises both and is
+     * treated as WPA2 on purpose, because it also accepts a WPA2 passphrase.
+     * OWE (enhanced open) is not plain open: it is encrypted but needs no key.
+     */
+    // The permission is checked inline, in the same method as the call, because
+    // that is the shape lint can verify; the try below covers a vendor build
+    // that refuses the query even with the grant.
+    @SuppressWarnings("deprecation")
+    private static String scannedSecurity(Context c, String ssid) {
+        if (ssid == null || ssid.isEmpty()
+                || c.checkSelfPermission(LocalWifi.PERM_LOCATION)
+                        != PackageManager.PERMISSION_GRANTED) {
+            return null;
+        }
+        WifiManager wm = manager(c);
+        if (wm == null) return null;
+        List<ScanResult> results;
+        try {
+            results = wm.getScanResults();
+        } catch (Exception e) {
+            return null;
+        }
+        if (results == null) return null;
+        for (ScanResult r : results) {
+            if (r == null || r.SSID == null || !r.SSID.equals(ssid)) continue;
+            String caps = r.capabilities == null ? "" : r.capabilities.toUpperCase(Locale.US);
+            boolean sae = caps.contains("SAE");
+            boolean psk = caps.contains("PSK");
+            if (sae && !psk) return SEC_WPA3;
+            if (caps.contains("OWE")) return SEC_OWE;
+            if (!sae && !psk && !caps.contains("WEP") && !caps.contains("EAP")) {
+                return SEC_OPEN;
+            }
+            return SEC_WPA2;
+        }
+        return null;
     }
 
     private static WifiManager manager(Context c) {

@@ -33,13 +33,15 @@ samples and cannot be published, so it is the GitHub-handle form instead.
   secure setting via `ContentObserver`, and re-enables wireless debugging when needed.
 - `Ensurer` — the actual setting write, with a 3 s quiet window so its own change
   notification cannot cause a write/notify loop (which would restart adbd repeatedly).
-- `WifiSuggestion` — registers a `WifiNetworkSuggestion` marked `setIsMetered(true)`.
-  Approve the system notification once; Android reconnects on its own afterwards,
-  including after reboots. Being metered and never validating, it does not become the
-  default route, so mobile data keeps carrying internet.
+- `WifiSuggestion` — registers a `WifiNetworkSuggestion` marked `setIsMetered(true)`,
+  using the saved passphrase (none for an open or OWE network), WPA3 when the scan says
+  the AP is WPA3-only, and enhanced open for OWE. Approve the system notification once;
+  Android reconnects on its own afterwards, including after reboots. Being metered and
+  never validating, it does not become the default route, so mobile data keeps carrying
+  internet.
 - `LocalWifi` — optional local-only mode using `WifiNetworkSpecifier`. This can never be
-  silent: Android shows a dialog and requires the passphrase on every reconnect.
-  Kept as a non-default mode.
+  silent: Android shows a dialog on every reconnect, and the app supplies the saved
+  passphrase. Kept as a non-default mode.
 - `ControlProvider` — the adb command surface: the same actions the buttons run,
   reachable with `adb shell content call` and readable through `keeper.sh`.
 - `PinnedPort` — probes `127.0.0.1:5555` every minute and, when nothing listens, asks
@@ -199,9 +201,9 @@ cp pin-adb-port.sh wifi-on.sh ~/wireless-adb-keeper/
 chmod +x ~/wireless-adb-keeper/*.sh
 ```
 
-Open the app, enter the Wi-Fi SSID and password, tap **Save**, then **Connect now** and
-approve the "available networks" notification once. Leave **Connect mode** on
-`auto-connect`.
+Open the app, enter the Wi-Fi SSID and password (both modes need it; open networks need
+none), tap **Save**, then **Connect now** and approve the "available networks"
+notification once. Leave **Connect mode** on `auto-connect`.
 
 ## Control from adb
 
@@ -317,7 +319,8 @@ ports that still accept a TCP connection.
 - The app cannot reconnect ADB; that is Termux's job (see the table above).
 - Pinning to 5555 needs Termux: without it the app still keeps wireless debugging on,
   it just cannot make adbd listen on a fixed port.
-- `WifiNetworkSpecifier` (local-only mode) always needs a tap and the passphrase.
+- `WifiNetworkSpecifier` (local-only mode) always needs a tap. Both modes need the saved
+  passphrase unless the network is open or enhanced open (OWE).
 - The TCP scan misses the live port if another scan runs at the same time — hence the
   single-instance guard. Avoid running `reconnect.sh` while the keepalive is scanning.
 - adbd only listens while a Wi-Fi network is connected; with Wi-Fi off there is nothing

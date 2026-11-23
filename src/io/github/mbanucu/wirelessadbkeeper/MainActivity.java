@@ -245,9 +245,9 @@ public class MainActivity extends Activity {
 
         localButton = action(root, "Connect mode: auto-connect",
                 "Switches how the phone rejoins the network. auto-connect registers a Wi-Fi "
-                        + "suggestion Android applies silently, even after reboot. local-only holds a "
-                        + "local link that can never carry internet, but needs a tap and the password "
-                        + "on every reconnect.",
+                        + "suggestion Android applies silently, even after reboot, using the saved "
+                        + "password. local-only holds a local link that can never carry internet, but "
+                        + "needs a tap on every reconnect.",
                 false, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -256,7 +256,7 @@ public class MainActivity extends Activity {
                         toLocal ? LocalWifi.MODE_LOCAL : LocalWifi.MODE_AUTO);
                 sendServiceAction(MonitorService.ACTION_RELOAD_LOCAL);
                 toast(toLocal
-                        ? "Local-only mode: needs a tap + password each reconnect"
+                        ? "Local-only mode: needs a tap each reconnect"
                         : "Auto-connect mode: system reconnects silently");
                 refreshStatus();
             }
@@ -292,7 +292,7 @@ public class MainActivity extends Activity {
     private View pageNetwork() {
         LinearLayout root = column();
         pageHeader(root, "Network",
-                "Credentials the app needs when Android cannot reconnect on its own.");
+                "The Wi-Fi network to rejoin, and the password it uses.");
 
         root.addView(sectionLabel("Saved network"));
         ssidField = field("SSID", InputType.TYPE_CLASS_TEXT);
@@ -307,16 +307,16 @@ public class MainActivity extends Activity {
         passField.setLayoutParams(spaced(matchWrap(), 10));
         root.addView(passField);
 
-        TextView passHint = text("Only used in local-only mode, where Android asks for the "
-                + "password on every reconnect.", 12, MUTED);
+        TextView passHint = text("Used in both modes. Auto-connect registers the network with "
+                + "the saved password; open networks need none.", 12, MUTED);
         passHint.setLayoutParams(spaced(matchWrap(), 6));
         passHint.setLineSpacing(dp(2), 1f);
         root.addView(passHint);
 
         action(root, "Save SSID and password",
-                "Stores the network name and password used in local-only mode. Auto-connect "
-                        + "mode does not need the password, only the saved network name for the "
-                        + "suggestion.",
+                "Stores the network name and any newly typed password for both modes. "
+                        + "Auto-connect registers a Wi-Fi suggestion with the saved values; "
+                        + "local-only mode uses them each time you approve a reconnect.",
                 false, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -400,10 +400,11 @@ public class MainActivity extends Activity {
                 + "- A foreground service watches for new Wi-Fi connections and re-enables wireless debugging immediately.\n"
                 + "- It also notices if wireless debugging is turned off while Wi-Fi is connected.\n"
                 + "- A periodic job and boot receiver re-apply the setting as a fallback.\n"
-                + "- Auto-connect mode registers a Wi-Fi suggestion: approve the system notification once, then Android "
-                + "reconnects silently, even after reboots. It is marked metered so mobile data stays the default route.\n"
+                + "- Auto-connect mode registers a Wi-Fi suggestion with the saved password (none for an open "
+                + "network): approve the system notification once, then Android reconnects silently, even after "
+                + "reboots. It is marked metered so mobile data stays the default route.\n"
                 + "- Local-only mode instead holds the network as a local link that can never carry internet, but "
-                + "Android makes you approve a dialog and needs the password on every reconnect.\n"
+                + "Android makes you approve a dialog on every reconnect.\n"
                 + "- The fixed port 5555 is kept by Termux's own adb, which is already paired with this "
                 + "phone: when the port is closed the app asks Termux to run "
                 + "wireless-adb-keeper/pin-adb-port.sh, which sends 'adb tcpip 5555'. An app cannot "
@@ -857,7 +858,8 @@ public class MainActivity extends Activity {
         if ("Mode".equals(label)) {
             return "How the phone rejoins the network. auto-connect registers a Wi-Fi "
                     + "suggestion Android applies silently; local-only holds a local link and "
-                    + "needs the password each time.";
+                    + "needs a tap each time. Both use the saved password, or none for an open "
+                    + "network.";
         }
         if ("Local link".equals(label)) {
             return "The state of the last local-only connection request.";
