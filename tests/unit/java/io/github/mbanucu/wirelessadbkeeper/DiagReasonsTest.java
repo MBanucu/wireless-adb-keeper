@@ -37,6 +37,13 @@ public final class DiagReasonsTest {
             checkTrue("a pin reason has a known level: " + reason.code(),
                     level(reason.level()));
         }
+        for (DiagReasons.ProfileChange change : DiagReasons.ProfileChange.values()) {
+            codes.add(change.code());
+            checkTrue("a profile change has a stable area.code: " + change.code(),
+                    change.code().matches("profile\\.[a-z_]+"));
+            checkTrue("a profile change has a known level: " + change.code(),
+                    level(change.level()));
+        }
         check("every code is distinct", codes.size(), new HashSet<>(codes).size());
 
         List<String> events = new ArrayList<>();
@@ -77,15 +84,38 @@ public final class DiagReasonsTest {
         check("a profile encryption failure is wifi.secret.unsealable",
                 DiagReasons.Failure.PASSPHRASE_UNSEALABLE,
                 DiagReasons.profileFailure(ProfileTable.ERROR_SECRET));
+        check("an unknown profile id is profile.unknown",
+                DiagReasons.Failure.PROFILE_UNKNOWN,
+                DiagReasons.profileFailure(ProfileTable.ERROR_UNKNOWN));
+        check("an out-of-range priority is profile.priority.invalid",
+                DiagReasons.Failure.PROFILE_PRIORITY,
+                DiagReasons.profileFailure(ProfileTable.ERROR_PRIORITY));
         check("any other profile refusal is wifi.profile.save_failed",
                 DiagReasons.Failure.PROFILE_SAVE_FAILED,
-                DiagReasons.profileFailure(ProfileTable.ERROR_UNKNOWN));
+                DiagReasons.profileFailure(ProfileTable.ERROR_DUPLICATE));
         checkTrue("the profile cap is named in the fix",
                 DiagReasons.profileDetail(ProfileTable.ERROR_FULL)
                         .contains(String.valueOf(ProfileTable.CAPACITY)));
+        checkTrue("an unknown profile names the listing command",
+                DiagReasons.profileDetail(ProfileTable.ERROR_UNKNOWN)
+                        .contains("./keeper.sh profiles"));
         checkTrue("a profile save failure never repeats the password",
                 !DiagReasons.profileDetail(ProfileTable.ERROR_SECRET)
                         .toLowerCase().contains("passphrase="));
+
+        List<String> changes = new ArrayList<>();
+        DiagReasons.Sink changeSink = (level, code, detail) ->
+                changes.add(level + " " + code + " " + detail);
+        for (DiagReasons.ProfileChange change : DiagReasons.ProfileChange.values()) {
+            DiagReasons.changed(changeSink, change, "id=default ssid=Home");
+        }
+        check("one event per profile change", DiagReasons.ProfileChange.values().length,
+                changes.size());
+        check("an add is journalled at info with its code and detail",
+                "info profile.added id=default ssid=Home", changes.get(0));
+        check("a remove is journalled at info with its code and detail",
+                "info profile.removed id=default ssid=Home",
+                changes.get(DiagReasons.ProfileChange.REMOVED.ordinal()));
 
         String line = DiagFormat.line("2026-11-23T17:00:00Z", 10, "warn", "key.pair_failed",
                 "passphrase=canary-pass token=canary-token pairing_code=canary-pair");

@@ -55,6 +55,11 @@ public final class Profiles {
         return table(c).remove(id);
     }
 
+    /** Moves a profile to a 1-based position; the order is the try order. */
+    public static synchronized ProfileTable.Outcome move(Context c, String id, int priority) {
+        return table(c).move(id, priority);
+    }
+
     /** The active SSID, or "" before any network is saved. */
     public static synchronized String ssid(Context c) {
         Profile profile = table(c).active();

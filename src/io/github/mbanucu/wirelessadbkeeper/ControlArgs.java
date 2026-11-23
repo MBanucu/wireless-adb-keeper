@@ -4,12 +4,14 @@ package io.github.mbanucu.wirelessadbkeeper;
  * A control call's method, positional argument and extras, resolved without a
  * Bundle.
  *
- * <p>The positional value means the SSID for {@code save_wifi} and the mode for
- * {@code set_mode}; the password only travels as a named extra. Reading the
- * mode only from extras made {@code keeper.sh mode local} pass null, and
- * {@link Keeper#setMode} treats null as "toggle" - so asking for the mode it
- * was already in switched to the other one. The fallback below is the rule
- * that fixes that, and it is tested as the bug rather than as a getter.
+ * <p>The positional value means the SSID for {@code save_wifi}, the mode for
+ * {@code set_mode} and the profile id for {@code remove_profile} and
+ * {@code set_priority}; the password, the explicit save id and the priority only
+ * travel as named extras. Reading the mode only from extras made
+ * {@code keeper.sh mode local} pass null, and {@link Keeper#setMode} treats null
+ * as "toggle" - so asking for the mode it was already in switched to the other
+ * one. The fallback below is the rule that fixes that, and it is tested as the
+ * bug rather than as a getter.
  */
 public final class ControlArgs {
 
@@ -29,6 +31,9 @@ public final class ControlArgs {
         CONNECT,
         SET_MODE,
         SAVE_WIFI,
+        PROFILES,
+        REMOVE_PROFILE,
+        SET_PRIORITY,
         PIN_PORT,
         PUBKEY,
         DIAG,
@@ -47,6 +52,9 @@ public final class ControlArgs {
                 case "connect": return CONNECT;
                 case "set_mode": return SET_MODE;
                 case "save_wifi": return SAVE_WIFI;
+                case "profiles": return PROFILES;
+                case "remove_profile": return REMOVE_PROFILE;
+                case "set_priority": return SET_PRIORITY;
                 case "pin_port": return PIN_PORT;
                 case "pubkey": return PUBKEY;
                 case "diag": return DIAG;
@@ -63,27 +71,40 @@ public final class ControlArgs {
     public final String mode;
     public final String ssid;
     public final String passphrase;
+    /** An explicit profile for {@code save_wifi}, or the target of a profile call. */
+    public final String id;
+    /** The raw {@code priority} extra; {@link ControlText#priority} parses it. */
+    public final String priority;
 
-    private ControlArgs(String name, Method method, String mode, String ssid, String passphrase) {
+    private ControlArgs(String name, Method method, String mode, String ssid, String passphrase,
+                        String id, String priority) {
         this.name = name;
         this.method = method;
         this.mode = mode;
         this.ssid = ssid;
         this.passphrase = passphrase;
+        this.id = id;
+        this.priority = priority;
     }
 
     /**
      * Resolves the call. An extras value wins; the positional argument is the
-     * documented fallback for {@code set_mode} and {@code save_wifi} only.
+     * documented fallback for {@code set_mode}, {@code save_wifi},
+     * {@code remove_profile} and {@code set_priority} only.
      */
     public static ControlArgs of(String method, String arg, Extras extras) {
         Method resolved = Method.of(method);
         String extraMode = extras == null ? null : extras.get("mode");
         String extraSsid = extras == null ? null : extras.get("ssid");
+        String extraId = extras == null ? null : extras.get("id");
         String mode = extraMode != null || resolved != Method.SET_MODE ? extraMode : arg;
         String ssid = extraSsid != null || resolved != Method.SAVE_WIFI ? extraSsid : arg;
+        boolean idIsPositional = resolved == Method.REMOVE_PROFILE
+                || resolved == Method.SET_PRIORITY;
+        String id = extraId != null || !idIsPositional ? extraId : arg;
         String passphrase = extras == null ? null : extras.get("passphrase");
-        return new ControlArgs(method, resolved, mode, ssid, passphrase);
+        String priority = extras == null ? null : extras.get("priority");
+        return new ControlArgs(method, resolved, mode, ssid, passphrase, id, priority);
     }
 
     public boolean known() {

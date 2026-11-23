@@ -40,6 +40,36 @@ public final class ControlArgsTest {
                 ControlArgs.of("save_wifi", "Home", extras("passphrase", "secret")).passphrase);
         check("an extras SSID still wins over the positional argument", "Other",
                 ControlArgs.of("save_wifi", "Home", extras("ssid", "Other")).ssid);
+        check("save_wifi without an explicit profile has no id", null, save.id);
+
+        ControlArgs saveProfile = ControlArgs.of("save_wifi", "Home",
+                extras("id", "p2", "passphrase", "secret"));
+        check("save_wifi carries an explicit profile id as an extra", "p2", saveProfile.id);
+        check("an explicit save still takes the SSID positionally", "Home",
+                saveProfile.ssid);
+        check("an explicit save still carries the password", "secret",
+                saveProfile.passphrase);
+
+        ControlArgs remove = ControlArgs.of("remove_profile", "p2", extras());
+        check("remove_profile is typed REMOVE_PROFILE", ControlArgs.Method.REMOVE_PROFILE,
+                remove.method);
+        check("remove_profile takes its id from the positional argument", "p2", remove.id);
+        check("remove_profile does not treat the id as an SSID", null, remove.ssid);
+        check("an extras id wins for remove_profile", "p3",
+                ControlArgs.of("remove_profile", "p2", extras("id", "p3")).id);
+        check("remove_profile without an id resolves null", null,
+                ControlArgs.of("remove_profile", null, extras()).id);
+
+        ControlArgs priority = ControlArgs.of("set_priority", "p2", extras("priority", "3"));
+        check("set_priority is typed SET_PRIORITY", ControlArgs.Method.SET_PRIORITY,
+                priority.method);
+        check("set_priority takes its id from the positional argument", "p2", priority.id);
+        check("set_priority takes the priority from an extra", "3", priority.priority);
+        check("set_priority without a priority resolves null", null,
+                ControlArgs.of("set_priority", "p2", extras()).priority);
+
+        check("profiles is typed PROFILES", ControlArgs.Method.PROFILES,
+                ControlArgs.of("profiles", null, null).method);
 
         ControlArgs missingSsid = ControlArgs.of("save_wifi", null, extras());
         check("save_wifi without an SSID resolves a null SSID", null, missingSsid.ssid);
