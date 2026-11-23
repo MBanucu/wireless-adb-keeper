@@ -75,7 +75,7 @@ or at the repository root. The SDK wins over a stale root jar on purpose: the
 app targets constants that an older jar does not have. With a
 jar, all of `src/` is compiled against it. Without one, only sources that do
 not `import android.*` are compiled, and the two ported probe suites below are
-skipped with a message; the six pure seam suites still run.
+skipped with a message; the pure seam suites still run.
 
 The **run** classpath contains the test output only - deliberately not
 `android.jar`. A suite that reaches an Android API by accident fails with
@@ -85,9 +85,10 @@ classpath.
 The identity and certificate suites are the exception to the jar-less subset:
 their classes (`AdbIdentity`, `AdbCertificate`) import `android.content.Context`
 for the device-protected storage entry points, which the suites never call.
-They need the jar to compile, like the app itself; the six pure seam suites
-(`DiagFormat`, `DiagSnapshot`, `SuggestionRecord`, `Backoff`, `EnsureDecision`,
-`ControlArgs`) do not.
+They need the jar to compile, like the app itself; the suites over pure classes
+(`DiagFormat`, `DiagSnapshot`, `SuggestionRecord`, `ProfileTable`, `Backoff`,
+`EnsureDecision`, `ControlArgs`, `Base64Codec`, `Provider`, `TermuxResult`) do
+not.
 
 ## What this deliberately does not test
 

@@ -32,7 +32,7 @@ public final class WifiSuggestion {
     /** Hash-only key from the interim build; it cannot rebuild a suggestion. */
     private static final String KEY_HASH_APPLIED = "applied_sha256";
     /** Encrypted in PassphraseStore, never in this prefs file. */
-    private static final String SLOT_APPLIED = "wifi_suggestion_applied";
+    private static final String SLOT_APPLIED = ProfileTable.LEGACY_APPLIED_SLOT;
 
     private static final String SEC_WPA2 = SuggestionRecord.SEC_WPA2;
     private static final String SEC_WPA3 = SuggestionRecord.SEC_WPA3;

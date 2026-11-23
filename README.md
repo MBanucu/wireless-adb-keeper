@@ -42,6 +42,11 @@ samples and cannot be published, so it is the GitHub-handle form instead.
 - `LocalWifi` — optional local-only mode using `WifiNetworkSpecifier`. This can never be
   silent: Android shows a dialog on every reconnect, and the app supplies the saved
   passphrase. Kept as a non-default mode.
+- `Profiles` — the saved-network list in the `local_wifi` prefs: ordered opaque ids
+  (`default`, `p1`, ...), one profile per SSID, capped at 16. Passphrases stay only in
+  the encrypted `PassphraseStore`, under `profile.<id>`. The first read of an upgraded
+  install turns the old single SSID and passphrase into `default`, so nothing has to be
+  retyped.
 - `ControlProvider` — the adb command surface: the same actions the buttons run,
   reachable with `adb shell content call` and readable through `keeper.sh`.
   `ControlReceiver` is the same dispatch over an ordered broadcast, the only
