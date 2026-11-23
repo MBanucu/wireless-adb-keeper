@@ -177,6 +177,12 @@ val probeScripts = tasks.register<Exec>("probeScripts") {
     commandLine("bash", layout.projectDirectory.file("tools/result-contract.sh").asFile.absolutePath)
 }
 
+val probeUnit = tasks.register<Exec>("probeUnit") {
+    group = "verification"
+    description = "Runs the zero-dependency JVM suites under tests/unit; needs no device."
+    commandLine("bash", layout.projectDirectory.file("tests/unit.sh").asFile.absolutePath)
+}
+
 val probeAdb = tasks.register<JavaExec>("probeAdb") {
     group = "verification"
     description = "Runs AdbProbe against adbd on the loopback; needs a phone and is never part of CI."
@@ -198,8 +204,8 @@ val probeAdb = tasks.register<JavaExec>("probeAdb") {
 // fail on a machine with no adbd listening on 5555.
 tasks.register("probe") {
     group = "verification"
-    description = "Runs the device-free host probes (IdentityProbe, TokenProbe, ResultProbe, scripts)."
-    dependsOn(probeIdentity, probeToken, probeResult, probeScripts)
+    description = "Runs the device-free unit suites and host probes (scripts, IdentityProbe, TokenProbe, ResultProbe)."
+    dependsOn(probeUnit, probeIdentity, probeToken, probeResult, probeScripts)
 }
 
 // `check` stays the standard entry point, and it now includes the probe. AGP
@@ -207,8 +213,8 @@ tasks.register("probe") {
 // named; that keeps `./gradlew test` meaningful even though there is no JUnit
 // dependency to run.
 tasks.matching { it.name == "test" }.configureEach {
-    dependsOn(probeIdentity, probeToken, probeResult, probeScripts)
+    dependsOn(probeUnit, probeIdentity, probeToken, probeResult, probeScripts)
 }
 tasks.named("check") {
-    dependsOn(probeIdentity, probeToken, probeResult, probeScripts)
+    dependsOn(probeUnit, probeIdentity, probeToken, probeResult, probeScripts)
 }
