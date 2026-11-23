@@ -1,6 +1,7 @@
 package io.github.mbanucu.wirelessadbkeeper;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.net.ConnectivityManager;
 import android.net.Network;
@@ -34,6 +35,8 @@ public final class LocalWifi {
     public static final String KEY_SSID = "ssid";
     public static final String KEY_ENABLED = "enabled";
     public static final String KEY_MODE = "mode";
+    /** Bumped after a change the running monitor has to reload; see below. */
+    public static final String KEY_REVISION = "revision";
     public static final String MODE_AUTO = "auto";
     public static final String MODE_LOCAL = "local";
     public static final String PERM_LOCATION = "android.permission.ACCESS_FINE_LOCATION";
@@ -113,6 +116,19 @@ public final class LocalWifi {
     public static void setMode(Context c, String mode) {
         c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit().putString(KEY_MODE, mode).apply();
+    }
+
+    /**
+     * Marks the saved settings as changed for a monitor that is already running.
+     *
+     * A content-provider caller on Android 12+ cannot start the foreground
+     * service, so it cannot deliver a reload intent. One counter key instead of
+     * a listener on every setting also means saving an SSID and a passphrase
+     * with two writes reloads once, after the last write.
+     */
+    public static void bumpRevision(Context c) {
+        SharedPreferences prefs = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        prefs.edit().putLong(KEY_REVISION, prefs.getLong(KEY_REVISION, 0L) + 1L).apply();
     }
 
     public static boolean isAutoMode(Context c) {

@@ -44,7 +44,7 @@ samples and cannot be published, so it is the GitHub-handle form instead.
   passphrase. Kept as a non-default mode.
 - `ControlProvider` — the adb command surface: the same actions the buttons run,
   reachable with `adb shell content call` and readable through `keeper.sh`.
-- `PinnedPort` — probes `127.0.0.1:5555` every minute and, when nothing listens, asks
+- `PinnedPort` — probes `127.0.0.1:5555` every 10 seconds and, when nothing listens, asks
   Termux to run `pin-adb-port.sh` through Termux's own `RUN_COMMAND` API. All the
   decisions (when to ask, how often, whether Termux is usable) live here.
 - `WifiRadio` — switches the Wi-Fi radio on. Apps lost that right in Android 10, so it
@@ -253,6 +253,12 @@ force-stopped or only just installed, which a broadcast cannot do.
 ./keeper.sh diag              # status snapshot + recent events
 ```
 
+`mode` and `save` reply with `reload=monitor` when a running monitor applied the
+change, or `reload=next start` when no service was running: the value is saved in
+either case and does not need a service restart. (`content call` cannot start the
+monitor service on Android 12+, so the running service watches the saved settings
+instead of being told by an intent.)
+
 Without the wrapper, the same thing by hand:
 
 ```bash
@@ -350,8 +356,16 @@ Measured on this phone (Android 15, unrooted):
 
 | event | 5555 closed → reachable |
 | --- | --- |
-| `adb usb`, monitor service running | ≤ 30 s (next one-minute tick) |
+| monitor service running: Wi-Fi back, wireless debugging re-enabled, `adb usb`, or adbd dying | typically ≤ ~16 s; up to ~31 s if the close follows a Termux ask inside the 30 s window (10 s probe, a check 15 s after a network/ensure event, ~1 s script) |
 | reboot, without touching anything | ≈ 60 s after `sys.boot_completed` (boot receiver → ask → `tcpip`) |
+
+The first check after the service starts runs 8 s in. The monitor's checks ask Termux at
+most once per 30 s, so a close that follows an ask inside that window waits for the
+window to pass (≤ ~31 s); `keeper.sh pin` and the button ask immediately. After a closed
+result the port is probed once more 15 s later; that is when `pinned_port=` catches up,
+so the status line can lag the port by up to 15 s.
+The 10 s probe interval is what keeps the no-event case inside #5's ≤ 30 s target; the
+probe is a loopback connect, and the 30 s window still limits what Termux is asked to do.
 
 The Termux script itself takes about a second once it has a serial to talk to. Pinning
 survives the keeper re-enabling wireless debugging: adbd restarts with a fresh TLS port
