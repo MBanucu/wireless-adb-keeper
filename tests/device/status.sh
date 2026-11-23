@@ -17,6 +17,7 @@ first=$(keeper status)
 # separate because location needs Android 10+, which is the app's floor.
 for key in \
     permission location wifi wireless service pinned_port mode job termux ssid sdk \
+    profiles profile_active \
     ; do
     count=$(printf '%s\n' "$first" | grep -c "^$key=" || true)
     assert_eq "status has the '$key' field once" 1 "$count"

@@ -34,6 +34,8 @@ public final class DiagReasons {
         SSID_MISSING("warn", "wifi.ssid.missing"),
         PROFILE_FULL("warn", "wifi.profile.full"),
         PROFILE_SAVE_FAILED("warn", "wifi.profile.save_failed"),
+        PROFILE_UNKNOWN("warn", "profile.unknown"),
+        PROFILE_PRIORITY("warn", "profile.priority.invalid"),
         PASSPHRASE_UNSEALABLE("error", "wifi.secret.unsealable"),
         KEY_LOAD_FAILED("error", "key.load_failed");
 
@@ -79,6 +81,29 @@ public final class DiagReasons {
         }
     }
 
+    /** One profile-store change, journalled under a stable code. */
+    public enum ProfileChange {
+        ADDED("info", "profile.added"),
+        UPDATED("info", "profile.updated"),
+        REMOVED("info", "profile.removed");
+
+        private final String level;
+        private final String code;
+
+        ProfileChange(String level, String code) {
+            this.level = level;
+            this.code = code;
+        }
+
+        public String level() {
+            return level;
+        }
+
+        public String code() {
+            return code;
+        }
+    }
+
     private DiagReasons() {
     }
 
@@ -88,10 +113,17 @@ public final class DiagReasons {
         return "error=" + detail;
     }
 
+    /** Journals one profile change; the detail carries id and SSID, never a secret. */
+    public static void changed(Sink sink, ProfileChange change, String detail) {
+        sink.event(change.level(), change.code(), detail);
+    }
+
     /** Maps a profile-store refusal to the same codes the snapshot uses. */
     public static Failure profileFailure(String error) {
         if (ProfileTable.ERROR_SECRET.equals(error)) return Failure.PASSPHRASE_UNSEALABLE;
         if (ProfileTable.ERROR_FULL.equals(error)) return Failure.PROFILE_FULL;
+        if (ProfileTable.ERROR_UNKNOWN.equals(error)) return Failure.PROFILE_UNKNOWN;
+        if (ProfileTable.ERROR_PRIORITY.equals(error)) return Failure.PROFILE_PRIORITY;
         return Failure.PROFILE_SAVE_FAILED;
     }
 
@@ -104,6 +136,12 @@ public final class DiagReasons {
         if (ProfileTable.ERROR_FULL.equals(error)) {
             return "profile limit is " + ProfileTable.CAPACITY
                     + "; remove a saved network first";
+        }
+        if (ProfileTable.ERROR_UNKNOWN.equals(error)) {
+            return "no such profile; fix: run ./keeper.sh profiles and use the id=... it lists";
+        }
+        if (ProfileTable.ERROR_PRIORITY.equals(error)) {
+            return "priority is out of range; fix: run ./keeper.sh profiles to see the order";
         }
         return "could not save the network: " + error;
     }

@@ -102,6 +102,11 @@ ring buffer, and never contains a passphrase, control token or pairing code.
 | `wifi.ssid.missing` | warn | `save` was called without an SSID |
 | `wifi.profile.full` | warn | the profile store is at its cap; remove a saved network first |
 | `wifi.profile.save_failed` | warn | the profile store refused the save (named error in the detail) |
+| `profile.added` | info | `save` created a profile; the detail carries its id and SSID |
+| `profile.updated` | info | a profile was saved, renamed or moved in the try order |
+| `profile.removed` | info | `profile-rm` deleted a profile, its ciphertext and applied record |
+| `profile.unknown` | warn | the id is not in the list; run `./keeper.sh profiles` and use the `id=...` it lists |
+| `profile.priority.invalid` | warn | the priority is not a number in `1..profiles`; the detail carries the current range |
 | `local.unsupported` | warn | local-only mode needs Android 10 or newer |
 | `local.no_permission` | warn | `ACCESS_FINE_LOCATION` is missing; the detail carries the `pm grant` line |
 | `local.service_refused` | warn | the monitor service refused to start for Connect now |

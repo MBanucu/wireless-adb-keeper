@@ -6,7 +6,11 @@
 #   ./keeperctl.sh wifi-on
 #   ./keeperctl.sh connect | stop
 #   ./keeperctl.sh mode auto | mode local
+#   ./keeperctl.sh profiles
 #   ./keeperctl.sh save SSID [PASSWORD]
+#   ./keeperctl.sh save --profile ID SSID [PASSWORD]
+#   ./keeperctl.sh profile-rm ID
+#   ./keeperctl.sh priority ID N
 #   ./keeperctl.sh schedule
 #   ./keeperctl.sh diag
 #
@@ -25,7 +29,7 @@ TOKEN_FILE=${KEEPER_TOKEN_FILE:-$HOME/.config/wireless-adb-keeper/token}
 AM=${AM:-/system/bin/am}
 
 usage() {
-    sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -127,16 +131,47 @@ case "$command" in
             *) echo "usage: $0 mode auto|local" >&2; exit 2 ;;
         esac
         ;;
+    profiles) call profiles ;;
     save)
-        if [ $# -lt 1 ] || [ -z "$1" ]; then
+        profile=
+        if [ "${1:-}" = "--profile" ]; then
+            if [ $# -lt 3 ] || [ -z "${2:-}" ] || [ -z "${3:-}" ]; then
+                echo "usage: $0 save --profile ID SSID [PASSWORD]" >&2
+                exit 2
+            fi
+            profile=$2
+            shift 2
+        fi
+        if [ $# -lt 1 ] || [ -z "${1:-}" ]; then
             echo "usage: $0 save SSID [PASSWORD]" >&2
             exit 2
         fi
-        if [ $# -ge 2 ]; then
+        if [ -n "$profile" ]; then
+            if [ $# -ge 2 ]; then
+                call save_wifi --es arg "$1" --es id "$profile" \
+                    --es passphrase "$2"
+            else
+                call save_wifi --es arg "$1" --es id "$profile"
+            fi
+        elif [ $# -ge 2 ]; then
             call save_wifi --es arg "$1" --es passphrase "$2"
         else
             call save_wifi --es arg "$1"
         fi
+        ;;
+    profile-rm)
+        if [ $# -lt 1 ] || [ -z "${1:-}" ]; then
+            echo "usage: $0 profile-rm ID" >&2
+            exit 2
+        fi
+        call remove_profile --es arg "$1"
+        ;;
+    priority)
+        if [ $# -lt 2 ] || [ -z "${1:-}" ] || [ -z "${2:-}" ]; then
+            echo "usage: $0 priority ID N" >&2
+            exit 2
+        fi
+        call set_priority --es arg "$1" --es priority "$2"
         ;;
     start|pin|pubkey|token)
         # These need adb for something an app uid cannot do: start another
