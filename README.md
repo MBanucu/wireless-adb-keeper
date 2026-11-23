@@ -232,6 +232,11 @@ cp pin-adb-port.sh wifi-on.sh discover.sh scan_ports.py adb-mdns.py ~/wireless-a
 chmod +x ~/wireless-adb-keeper/*.sh ~/wireless-adb-keeper/*.py
 ```
 
+An existing install at `~/wireless-adb-keeper/` must re-run that command after
+upgrading: `pin-adb-port.sh` now needs `discover.sh` and `scan_ports.py` beside it, and
+the app cannot report a missing helper because `RUN_COMMAND` is fire-and-forget — it
+records "asked Termux" and the port stays closed (#37).
+
 Open the app, enter the Wi-Fi SSID and password (both modes need it; open networks need
 none), tap **Save**, then **Connect now** and approve the "available networks"
 notification once. Leave **Connect mode** on `auto-connect`.
