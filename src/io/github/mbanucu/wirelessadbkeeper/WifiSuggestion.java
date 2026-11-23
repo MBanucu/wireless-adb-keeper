@@ -49,7 +49,10 @@ public final class WifiSuggestion {
     public static int add(Context c) {
         String applied = appliedRecord(c);
         WifiManager wm = manager(c);
-        if (wm == null) return -1;
+        if (wm == null) {
+            Diag.warn(c, "wifi.suggest.no_service", "WifiManager is unavailable");
+            return -1;
+        }
 
         String ssid = LocalWifi.ssid(c);
         String pass = LocalWifi.passphrase(c);
@@ -62,7 +65,11 @@ public final class WifiSuggestion {
             security = SEC_OPEN;
         } else if (SEC_OWE.equals(scanned)) {
             security = SEC_OWE;
-        } else if (pass == null || pass.isEmpty()) {
+        } else if (pass == null) {
+            journal(c, "warn", "wifi.suggest.decrypt_failed", ssid
+                    + ": the stored passphrase cannot be decrypted; save it again");
+            return -2;
+        } else if (pass.isEmpty()) {
             Log.w(Ensurer.TAG, "wifi suggestion: no password stored for " + ssid);
             Diag.warn(c, "wifi.suggest.no_password", ssid + ": auto-connect needs the password");
             return -2;
@@ -104,13 +111,13 @@ public final class WifiSuggestion {
                     Diag.warn(c, "wifi.suggest.record_unsealed", ssid);
                 }
             } else {
-                Diag.warn(c, "wifi.suggest.failed", ssid + " (" + security
+                Diag.warn(c, "wifi.suggest.refused", ssid + " (" + security
                         + "): status " + status);
             }
             return status;
         } catch (Exception e) {
             Log.e(Ensurer.TAG, "wifi suggestion: addNetworkSuggestions failed", e);
-            Diag.error(c, "wifi.suggest.failed", ssid + ": " + e);
+            Diag.error(c, "wifi.suggest.refused", ssid + ": request failed: " + e);
             return -4;
         }
     }
@@ -156,7 +163,11 @@ public final class WifiSuggestion {
      */
     private static String appliedRecord(Context c) {
         String stored = PassphraseStore.getSecret(c, SLOT_APPLIED);
-        if (stored == null) stored = "";
+        if (stored == null) {
+            journal(c, "warn", "wifi.suggest.record_undecryptable",
+                    "the applied suggestion record cannot be decrypted; save the network again");
+            stored = "";
+        }
         android.content.SharedPreferences store = prefs(c);
         String legacy = store.getString(KEY_LEGACY_APPLIED, null);
         if (legacy != null) {
@@ -269,5 +280,17 @@ public final class WifiSuggestion {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /** Last decrypt reason journalled; add/count/remove would otherwise repeat it. */
+    private static String lastJournal = "";
+
+    private static void journal(Context c, String level, String code, String detail) {
+        String key = level + " " + code + " " + detail;
+        synchronized (WifiSuggestion.class) {
+            if (key.equals(lastJournal)) return;
+            lastJournal = key;
+        }
+        Diag.event(c, level, code, detail);
     }
 }

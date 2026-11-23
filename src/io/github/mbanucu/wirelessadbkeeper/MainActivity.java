@@ -331,6 +331,10 @@ public class MainActivity extends Activity {
                         ssidField.getText().toString(), null,
                         typed.isEmpty() ? null : typed);
                 if (!saved.ok()) {
+                    DiagReasons.Failure failure = DiagReasons.profileFailure(saved.error());
+                    Diag.event(MainActivity.this, failure.level(), failure.code(),
+                            "profile save refused: "
+                                    + DiagReasons.profileDetail(saved.error()));
                     toast("Could not save: " + saved.error());
                     return;
                 }

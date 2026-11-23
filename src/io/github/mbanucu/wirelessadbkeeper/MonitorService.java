@@ -59,8 +59,6 @@ public class MonitorService extends Service {
     private LocalWifi localWifi;
     /** Whether the credential-protected Wi-Fi mode has been applied. */
     private boolean applied;
-    /** Last journalled pin state, so an unchanged check does not fill the log. */
-    private String lastPinState = "";
 
     @Override
     public void onCreate() {
@@ -101,18 +99,6 @@ public class MonitorService extends Service {
         Log.i(Ensurer.TAG, "MonitorService started"
                 + (userUnlocked() ? "" : " (before unlock)"));
     }
-
-    /** Journals a pin state only when it changes; the loop runs every minute. */
-    private void recordPinState(String state) {
-        if (state == null || state.equals(lastPinState)) return;
-        lastPinState = state;
-        if (state.startsWith("listening")) {
-            Diag.info(this, "pin.state", state);
-        } else {
-            Diag.warn(this, "pin.state", state);
-        }
-    }
-
 
     /** True once credential-encrypted storage and the Wi-Fi prefs are readable. */
     private boolean userUnlocked() {
@@ -421,7 +407,6 @@ public class MonitorService extends Service {
                     // onDestroy may have run while the probe was in flight.
                     if (!running) return;
                     Log.i(Ensurer.TAG, "pin check: " + state);
-                    recordPinState(state);
                     if (!recheck && !state.startsWith("listening") && !pinRecheckPending) {
                         // The Termux script needs a few seconds; probe again
                         // before the next tick, so a pin that worked is not

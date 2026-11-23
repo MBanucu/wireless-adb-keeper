@@ -142,9 +142,9 @@ The identity and certificate suites are the exception to the jar-less subset:
 their classes (`AdbIdentity`, `AdbCertificate`) import `android.content.Context`
 for the device-protected storage entry points, which the suites never call.
 They need the jar to compile, like the app itself; the suites over pure classes
-(`DiagFormat`, `DiagSnapshot`, `SuggestionRecord`, `ProfileTable`, `Backoff`,
-`EnsureDecision`, `ControlArgs`, `Base64Codec`, `Provider`, `TermuxResult`) do
-not.
+(`DiagFormat`, `DiagSnapshot`, `DiagReasons`, `PermissionAudit`, `SuggestionRecord`,
+`ProfileTable`, `Backoff`, `EnsureDecision`, `ControlArgs`, `Base64Codec`,
+`Provider`, `TermuxResult`) do not.
 
 ## What this deliberately does not test
 

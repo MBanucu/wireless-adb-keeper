@@ -184,10 +184,9 @@ final class PassphraseStore {
         } catch (Exception e) {
             // A lost or invalidated key cannot be recovered; treat the value as
             // unset rather than crash the service or the Network page. The
-            // journal entry is what tells the user why auto-connect stopped
-            // working after a lock-screen change or a restore.
+            // caller journals the reason (wifi.suggest.decrypt_failed,
+            // wifi.secret.undecryptable), which names the feature affected.
             Log.e(TAG, "wifi secret: cannot decrypt, treating as unset", e);
-            Diag.warn(c, "wifi.secret.undecryptable", String.valueOf(e));
             return null;
         }
     }
@@ -201,7 +200,6 @@ final class PassphraseStore {
                     Base64Codec.encode(encrypted), Base64Codec.encode(cipher.getIV())};
         } catch (Exception e) {
             Log.e(TAG, "wifi secret: encryption failed, value not stored", e);
-            Diag.error(c, "wifi.secret.unsealable", String.valueOf(e));
             return null;
         }
     }

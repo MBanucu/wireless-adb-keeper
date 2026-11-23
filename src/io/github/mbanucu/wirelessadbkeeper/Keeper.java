@@ -29,7 +29,12 @@ public final class Keeper {
     public static String wifiOn(Context c) {
         String result = WifiRadio.enable(c);
         return result == null
-                ? "error=Termux unavailable; Wi-Fi must be switched on by hand"
+                ? fail(c, DiagReasons.Failure.WIFI_ON_NO_TERMUX,
+                        "Termux is not installed or lacks RUN_COMMAND; turn Wi-Fi on by hand;"
+                                + " fix: install Termux from F-Droid, set"
+                                + " allow-external-apps=true, then "
+                                + PermissionAudit.grantCommand(c.getPackageName(),
+                                        PermissionAudit.RUN_COMMAND))
                 : "result=" + result;
     }
 
@@ -51,10 +56,12 @@ public final class Keeper {
             // Android 12+ blocks a background app from starting its own
             // foreground service; from adb the shell can do it explicitly.
             if (String.valueOf(e.getMessage()).contains("not allowed")) {
-                return "error=background start refused; run: adb shell am start-foreground-service"
-                        + " -n " + c.getPackageName() + "/.MonitorService";
+                return fail(c, DiagReasons.Failure.SERVICE_START_REFUSED,
+                        "background start refused; fix: adb shell am start-foreground-service"
+                                + " -n " + c.getPackageName() + "/.MonitorService");
             }
-            return "error=" + e;
+            return fail(c, DiagReasons.Failure.SERVICE_START_FAILED,
+                    "could not start the monitor service: " + e);
         }
     }
 
@@ -62,14 +69,20 @@ public final class Keeper {
     public static String connectNow(Context c) {
         boolean auto = LocalWifi.isAutoMode(c);
         if (!auto && !LocalWifi.supported()) {
-            return "error=local-only mode needs Android 10 or newer";
+            return fail(c, DiagReasons.Failure.LOCAL_UNSUPPORTED,
+                    "local-only mode needs Android 10 or newer");
         }
         if (!auto && !LocalWifi.hasLocationPermission(c)) {
-            return "error=location not granted; adb shell pm grant "
-                    + c.getPackageName() + " " + LocalWifi.PERM_LOCATION;
+            return fail(c, DiagReasons.Failure.LOCAL_NO_PERMISSION,
+                    "location not granted; fix: "
+                            + PermissionAudit.grantCommand(c.getPackageName(),
+                                    PermissionAudit.FINE_LOCATION));
         }
         if (!sendServiceAction(c, MonitorService.ACTION_CONNECT_LOCAL)) {
-            return "error=monitor service is not running; start it first";
+            return fail(c, DiagReasons.Failure.LOCAL_SERVICE_REFUSED,
+                    "monitor service is not running; start it first; fix:"
+                            + " adb shell am start-foreground-service -n "
+                            + c.getPackageName() + "/.MonitorService");
         }
         return auto ? "connect=suggestion requested"
                 : "connect=local link requested";
@@ -85,7 +98,7 @@ public final class Keeper {
         } else if (LocalWifi.MODE_LOCAL.equalsIgnoreCase(mode)) {
             auto = false;
         } else {
-            return "error=mode must be auto or local";
+            return fail(c, DiagReasons.Failure.MODE_INVALID, "mode must be auto or local");
         }
         LocalWifi.setMode(c, auto ? LocalWifi.MODE_AUTO : LocalWifi.MODE_LOCAL);
         // Do not start the service: Android 12+ refuses that from the provider,
@@ -98,13 +111,16 @@ public final class Keeper {
     /** Stores the credentials; the password is never echoed back. */
     public static String saveNetwork(Context c, String ssid, String passphrase) {
         if (ssid == null || ssid.trim().isEmpty()) {
-            return "error=ssid is required";
+            return fail(c, DiagReasons.Failure.SSID_MISSING, "ssid is required");
         }
         // The single-network command now saves by SSID, so an existing network
         // is updated instead of becoming a second profile. Security stays as
         // configured; this path has no security argument.
         ProfileTable.Outcome saved = Profiles.save(c, ssid, null, passphrase);
-        if (!saved.ok()) return "error=" + saved.error();
+        if (!saved.ok()) {
+            return fail(c, DiagReasons.profileFailure(saved.error()),
+                    DiagReasons.profileDetail(saved.error()));
+        }
         LocalWifi.bumpRevision(c);
         String savedPass = Profiles.secret(c, saved.profile().id());
         return "ssid=" + saved.profile().ssid()
@@ -130,13 +146,19 @@ public final class Keeper {
      * public half is what a pairing code would authorise in adb_keys.
      */
     public static String pubkey(Context c) {
+        boolean existed = new File(AdbIdentity.dir(c), AdbIdentity.KEY_FILE).isFile();
         try {
             AdbKey key = AdbIdentity.load(c);
+            if (!existed) {
+                Diag.info(c, "key.created", "no ADB key found; generated a new one;"
+                        + " pair this app again");
+            }
             return "pubkey=" + key.publicKeyBase64()
                     + "\nname=" + AdbIdentity.KEY_NAME
                     + "\npath=" + new File(AdbIdentity.dir(c), AdbIdentity.KEY_FILE);
         } catch (Exception e) {
-            return "error=" + e.getMessage();
+            return fail(c, DiagReasons.Failure.KEY_LOAD_FAILED,
+                    "could not load the ADB key: " + e.getMessage());
         }
     }
 
@@ -198,5 +220,11 @@ public final class Keeper {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /** One coded journal event, then the same sentence as the error reply. */
+    private static String fail(Context c, DiagReasons.Failure failure, String detail) {
+        return DiagReasons.fail(
+                (level, code, reason) -> Diag.event(c, level, code, reason), failure, detail);
     }
 }

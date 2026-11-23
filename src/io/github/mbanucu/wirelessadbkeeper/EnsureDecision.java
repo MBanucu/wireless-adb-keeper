@@ -11,11 +11,13 @@ package io.github.mbanucu.wirelessadbkeeper;
  *       <td>{@link Reason#NO_PERMISSION}</td><td>ensure.no_permission</td></tr>
  *   <tr><td>2</td><td>Wi-Fi not connected</td>
  *       <td>{@link Reason#NO_WIFI}</td><td>ensure.no_wifi</td></tr>
- *   <tr><td>3</td><td>the settings read/write threw</td>
+ *   <tr><td>3</td><td>the settings read threw</td>
  *       <td>{@link Reason#FAILED}</td><td>ensure.failed</td></tr>
- *   <tr><td>4</td><td>wireless debugging is off</td>
+ *   <tr><td>4</td><td>a settings write was refused</td>
+ *       <td>{@link Reason#SETTINGS_REFUSED}</td><td>ensure.settings_refused</td></tr>
+ *   <tr><td>5</td><td>wireless debugging is off</td>
  *       <td>{@link Reason#CHANGED}</td><td>ensure.changed</td></tr>
- *   <tr><td>5</td><td>wireless debugging is already on</td>
+ *   <tr><td>6</td><td>wireless debugging is already on</td>
  *       <td>{@link Reason#NOOP}</td><td>ensure.noop</td></tr>
  * </table>
  *
@@ -26,16 +28,21 @@ package io.github.mbanucu.wirelessadbkeeper;
  * port and unlock signals that surround ensure are not inputs here: ensure
  * runs before the first unlock and must stay cheap, and those decisions live
  * in {@link PinnedPort}, {@link LocalWifi} and {@link MonitorService}.
+ *
+ * <p>{@link Reason#SETTINGS_REFUSED} is an outcome, not an input: the settings
+ * were readable enough to decide, but the write threw. {@link #decide} never
+ * returns it; {@link Ensurer} selects it in the catch around the write.
  */
 public final class EnsureDecision {
 
-    /** The five journal outcomes, with the words each one records. */
+    /** The journal outcomes, with the words each one records. */
     public enum Reason {
         NO_PERMISSION("warn", "ensure.no_permission", "Missing WRITE_SECURE_SETTINGS permission"),
         NO_WIFI("info", "ensure.no_wifi", "Wi-Fi not connected"),
         CHANGED("info", "ensure.changed", "Enabled wireless debugging"),
         NOOP("info", "ensure.noop", "Already enabled"),
-        FAILED("error", "ensure.failed", "Error");
+        FAILED("error", "ensure.failed", "Error"),
+        SETTINGS_REFUSED("error", "ensure.settings_refused", "Settings write refused");
 
         private final String level;
         private final String code;

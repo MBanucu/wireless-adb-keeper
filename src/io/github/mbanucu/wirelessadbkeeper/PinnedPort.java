@@ -71,6 +71,8 @@ public final class PinnedPort {
     private static long fallbackLoggedAt = 0L;
     /** Termux < 0.109 cannot answer; log that once per process. */
     private static boolean oldTermuxLogged = false;
+    /** Last pin event, so the 10 s probe does not repeat an unchanged reason. */
+    private static String lastJournal = "";
     /** Each pending intent needs its own request code or only the first result arrives. */
     private static final AtomicInteger RESULT_REQUEST = new AtomicInteger(
             (int) (SystemClock.elapsedRealtime() & 0x7fffffff));
@@ -136,16 +138,36 @@ public final class PinnedPort {
         if (isListening()) {
             noteProbeFallback(c);
             TermuxResult r = lastResult;
+            String state;
             if (isFresh(r) && r.isPinScript() && r.ok()) {
-                return setState("listening on " + PORT + "; script " + r.summary());
+                state = setState("listening on " + PORT + "; script " + r.summary());
+            } else {
+                state = setState("listening on " + PORT);
             }
-            return setState("listening on " + PORT);
+            journal(c, "info", "pin.state", state);
+            return state;
         }
         if (!hasTermux(c)) {
-            return setState("closed (Termux not installed)");
+            String state = setState("closed (Termux not installed; install it from F-Droid)");
+            journal(c, "warn", "pin.termux_missing",
+                    "Termux not installed; fix: install Termux from F-Droid, then set"
+                            + " allow-external-apps=true");
+            return state;
         }
         if (!termuxUsable(c)) {
-            return setState("closed (grant " + TERMUX_PERM + ")");
+            String fix = PermissionAudit.grantCommand(c.getPackageName(), TERMUX_PERM);
+            String state = setState("closed (grant " + TERMUX_PERM + "; fix: " + fix + ")");
+            journal(c, "warn", "pin.no_permission",
+                    "Termux RUN_COMMAND not granted; fix: " + fix);
+            return state;
+        }
+        TermuxResult fresh = lastResult;
+        if (isFresh(fresh) && fresh.isPinScript()
+                && DiagReasons.pinReason(fresh) == DiagReasons.PinReason.OK) {
+            // The one case the result cannot see: the script completed but the
+            // socket still does not answer. The probe stays the authority.
+            journal(c, "warn", "pin.port_closed", "script reports pinned but 127.0.0.1:"
+                    + PORT + " is closed: " + fresh.uiLine());
         }
         synchronized (LOCK) {
             long now = SystemClock.elapsedRealtime();
@@ -166,8 +188,27 @@ public final class PinnedPort {
         synchronized (LOCK) {
             state = closedState(asked
                     ? "closed (asked Termux)" : "closed (could not reach Termux)");
-            return state;
         }
+        if (!asked) {
+            journal(c, "warn", "pin.run_refused",
+                    "Termux RUN_COMMAND was refused; set allow-external-apps=true in"
+                            + " ~/.termux/termux.properties and check "
+                            + TERMUX_PERM);
+        } else {
+            journal(c, "info", "pin.waiting",
+                    "asked Termux to pin port " + PORT + "; waiting for the port or result");
+        }
+        return state;
+    }
+
+    /** Journals a pin event once per distinct reason; the probe runs every 10 s. */
+    private static void journal(Context c, String level, String code, String detail) {
+        String key = level + " " + code + " " + detail;
+        synchronized (LOCK) {
+            if (key.equals(lastJournal)) return;
+            lastJournal = key;
+        }
+        Diag.event(c, level, code, detail);
     }
 
     /**
@@ -188,9 +229,11 @@ public final class PinnedPort {
 
     /**
      * Termux sends the result in {@link TermuxResultService}. This is called
-     * from that service, on the process's main thread.
+     * from that service, on the process's main thread, and is the one place a
+     * finished pin attempt is journalled: the state transition that follows
+     * only repeats the same reason.
      */
-    static void recordResult(TermuxResult r) {
+    static void recordResult(Context c, TermuxResult r) {
         if (r == null || !r.isPinScript()) return;
         lastResult = r;
         synchronized (LOCK) {
@@ -200,6 +243,12 @@ public final class PinnedPort {
             setState("listening on " + PORT + "; script " + r.summary());
         } else {
             setState("closed; script " + r.uiLine());
+        }
+        DiagReasons.PinReason reason = DiagReasons.pinReason(r);
+        if (reason == DiagReasons.PinReason.OK) {
+            journal(c, "info", "pin.result", r.journal());
+        } else {
+            journal(c, reason.level(), reason.code(), r.journal());
         }
     }
 

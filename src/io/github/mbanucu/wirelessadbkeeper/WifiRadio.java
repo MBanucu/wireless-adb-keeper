@@ -52,9 +52,15 @@ public final class WifiRadio {
             }
         }
         if (PinnedPort.termuxUsable(c)) {
-            return PinnedPort.runScript(c, SCRIPT)
-                    ? "Asked Termux to turn Wi-Fi on"
-                    : "Could not reach Termux";
+            if (PinnedPort.runScript(c, SCRIPT)) {
+                return "Asked Termux to turn Wi-Fi on";
+            }
+            String fix = "set allow-external-apps=true in ~/.termux/termux.properties; "
+                    + PermissionAudit.grantCommand(c.getPackageName(),
+                            PermissionAudit.RUN_COMMAND);
+            Diag.warn(c, "wifi.on.run_refused",
+                    "Termux RUN_COMMAND was refused; fix: " + fix);
+            return "Could not reach Termux; fix: " + fix;
         }
         return null;
     }
