@@ -6,14 +6,18 @@ echo "== cleaning =="
 rm -rf build
 mkdir -p build/classes build/dex
 
-# android.jar is either dropped next to build.sh or taken from the SDK the
-# Termux side already has; platforms are sorted so the newest one wins.
-JAR=android.jar
-if [ ! -f "$JAR" ]; then
+# Prefer the newest SDK platform the Termux side already has: a locally dropped
+# android.jar can be older than the targetSdk in the manifest, which fails on
+# constants the app legitimately uses. ANDROID_JAR overrides either source.
+JAR=${ANDROID_JAR:-}
+if [ -z "$JAR" ]; then
     JAR=$(ls -1 "$HOME"/android-sdk/platforms/*/android.jar 2>/dev/null | tail -1)
 fi
+if [ -z "${JAR:-}" ] && [ -f android.jar ]; then
+    JAR=android.jar
+fi
 if [ -z "${JAR:-}" ] || [ ! -f "$JAR" ]; then
-    echo "android.jar not found (put it next to build.sh or under ~/android-sdk/platforms/)" >&2
+    echo "android.jar not found (put it next to build.sh, under ~/android-sdk/platforms/, or set ANDROID_JAR)" >&2
     exit 1
 fi
 echo "== using $JAR =="

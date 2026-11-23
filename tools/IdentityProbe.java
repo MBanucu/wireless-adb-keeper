@@ -38,6 +38,13 @@ public final class IdentityProbe {
         failures += check("public key line names the key",
                 first.publicKeyLine(AdbIdentity.KEY_NAME).endsWith(" " + AdbIdentity.KEY_NAME));
 
+        byte[] sample = new byte[524];
+        for (int i = 0; i < sample.length; i++) {
+            sample[i] = (byte) (i * 31 + 7);
+        }
+        failures += check("base64 codec round-trips arbitrary bytes",
+                Arrays.equals(sample, Base64Codec.decode(Base64Codec.encode(sample))));
+
         AdbKey second = AdbIdentity.loadOrCreate(dir);
         failures += check("reload keeps the same key",
                 second.publicKeyBase64().equals(first.publicKeyBase64()));

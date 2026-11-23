@@ -49,14 +49,18 @@ public final class AdbIdentity {
 
     /** Loads the key, generating it on first use. Safe from any thread. */
     public static AdbKey load(Context c) throws IOException {
+        File dir = dir(c);
+        File file = new File(dir, KEY_FILE);
         AdbKey key = cached;
-        if (key != null) {
+        // A deleted key is the documented way to reset the identity; do not keep
+        // serving the in-memory copy after the file it came from is gone.
+        if (key != null && file.isFile()) {
             return key;
         }
         synchronized (AdbIdentity.class) {
             key = cached;
-            if (key == null) {
-                key = loadOrCreate(dir(c));
+            if (key == null || !file.isFile()) {
+                key = loadOrCreate(dir);
                 cached = key;
             }
         }
