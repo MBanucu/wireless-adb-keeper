@@ -267,6 +267,17 @@ strips the envelope. `start` is the one command that does not use the provider:
 Android 12+ refuses to let a background app start its own foreground service, so the
 shell starts it with `am start-foreground-service` instead.
 
+`ENSURE` is a broadcast rather than a provider call:
+
+```bash
+adb shell am broadcast -a io.github.mbanucu.wirelessadbkeeper.ENSURE \
+    -n io.github.mbanucu.wirelessadbkeeper/.EnsureReceiver
+```
+
+`reconnect.sh` prints the same command as a hint. The receiver is exported but
+requires `WRITE_SECURE_SETTINGS`, which shell, root, system and the app itself
+hold; an ordinary app's broadcast is refused.
+
 ## Diagnostics
 
 When something does not work — a boot that never pinned the port, a missing

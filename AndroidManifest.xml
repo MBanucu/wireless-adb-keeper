@@ -38,6 +38,13 @@
 
     <uses-feature android:name="android.hardware.wifi" android:required="false" />
 
+    <!-- Package visibility: Android 11+ hides installed apps unless they are
+         named here, and PinnedPort.hasTermux() is the one lookup that has to
+         work on a fresh install, before this app has interacted with Termux. -->
+    <queries>
+        <package android:name="com.termux" />
+    </queries>
+
     <application
         android:label="Wireless ADB Keeper"
         android:allowBackup="false"
@@ -67,9 +74,14 @@
             </intent-filter>
         </receiver>
 
+        <!-- Exported for `am broadcast` from adb, but only to holders of
+             WRITE_SECURE_SETTINGS (shell, root, system and the app itself), so
+             reconnect.sh's hint still works from an adb shell while an
+             ordinary app's ENSURE is refused. -->
         <receiver
             android:name=".EnsureReceiver"
-            android:exported="true">
+            android:exported="true"
+            android:permission="android.permission.WRITE_SECURE_SETTINGS">
             <intent-filter>
                 <action android:name="io.github.mbanucu.wirelessadbkeeper.ENSURE" />
             </intent-filter>
