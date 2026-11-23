@@ -159,9 +159,19 @@ public class MonitorService extends Service {
         prefsListener = new SharedPreferences.OnSharedPreferenceChangeListener() {
             @Override
             public void onSharedPreferenceChanged(SharedPreferences p, String key) {
-                if (!LocalWifi.KEY_REVISION.equals(key) || !userUnlocked()) return;
-                Log.i(Ensurer.TAG, "saved Wi-Fi settings changed; reloading");
-                applyMode("settings saved");
+                if (!LocalWifi.KEY_REVISION.equals(key)) return;
+                // The callback runs on whichever thread wrote the pref; a
+                // `content call` writes on a binder thread. applyMode touches
+                // LocalWifi and its network callbacks, which belong to the
+                // service's main thread, so hand it over rather than race them.
+                handler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (!running || !userUnlocked()) return;
+                        Log.i(Ensurer.TAG, "saved Wi-Fi settings changed; reloading");
+                        applyMode("settings saved");
+                    }
+                });
             }
         };
         prefs.registerOnSharedPreferenceChangeListener(prefsListener);

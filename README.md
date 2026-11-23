@@ -340,7 +340,7 @@ Measured on this phone (Android 15, unrooted):
 
 | event | 5555 closed → reachable |
 | --- | --- |
-| monitor service running: Wi-Fi back, wireless debugging re-enabled, `adb usb`, or adbd dying | ≤ ~16 s: a port that closes with no event is noticed by the 10 s probe, a network/ensure event schedules a check 15 s later, and the Termux script takes about a second |
+| monitor service running: Wi-Fi back, wireless debugging re-enabled, `adb usb`, or adbd dying | typically ≤ ~16 s; up to ~31 s if the close follows a Termux ask inside the 30 s window (10 s probe, a check 15 s after a network/ensure event, ~1 s script) |
 | reboot, without touching anything | ≈ 60 s after `sys.boot_completed` (boot receiver → ask → `tcpip`) |
 
 The first check after the service starts runs 8 s in. The monitor's checks ask Termux at
