@@ -7,8 +7,11 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
 import android.database.ContentObserver;
+import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -17,20 +20,41 @@ import android.os.Looper;
 import android.provider.Settings;
 import android.text.InputType;
 import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.View;
+import android.view.Window;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 public class MainActivity extends Activity {
-    private TextView status;
+    // A small fixed palette so the screen reads the same on every device theme.
+    private static final int ACCENT = 0xFF3B5BDB;
+    private static final int TEXT = 0xFF111827;
+    private static final int MUTED = 0xFF6B7280;
+    private static final int OK = 0xFF15803D;
+    private static final int BAD = 0xFFB91C1C;
+    private static final int CARD_BG = 0xFFF3F4F6;
+    private static final int HAIRLINE = 0xFFD1D5DB;
+
+    private static final String[] PAGE_TITLES = {"Status", "Connect", "Network", "Help"};
+    private static final String STATE_PAGE = "page";
+
+    private LinearLayout statusBox;
     private Button serviceButton;
     private Button localButton;
     private EditText ssidField;
     private EditText passField;
+    private View[] pages;
+    private View[] navIndicators;
+    private TextView[] navLabels;
+    private int page = 0;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean reEnabling = false;
     private ContentObserver observer;
@@ -39,7 +63,22 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // No platform action bar: the window is edge to edge, so we keep our own
+        // header and pad it past the status bar.
+        requestWindowFeature(Window.FEATURE_NO_TITLE);
         setContentView(buildUi());
+        // Android 15 ignores status bar colours, so ask for dark icons instead:
+        // the page background is light all the way to the top. This needs the
+        // decor view, which only exists once the content is set.
+        if (Build.VERSION.SDK_INT >= 30) {
+            getWindow().getInsetsController().setSystemBarsAppearance(
+                    WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS,
+                    WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);
+        } else {
+            getWindow().getDecorView().setSystemUiVisibility(
+                    View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
+        }
+        if (savedInstanceState != null) showPage(savedInstanceState.getInt(STATE_PAGE, 0));
         startMonitorService();
         scheduleJobs(this);
         requestNotificationPermission();
@@ -53,55 +92,79 @@ public class MainActivity extends Activity {
     }
 
     private View buildUi() {
-        ScrollView scroll = new ScrollView(this);
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+            @Override
+            public WindowInsets onApplyWindowInsets(View v, WindowInsets insets) {
+                v.setPadding(0, insets.getSystemWindowInsetTop(), 0, 0);
+                return insets;
+            }
+        });
+
+        FrameLayout content = new FrameLayout(this);
+        shell.addView(content, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        pages = new View[] {pageStatus(), pageConnect(), pageNetwork(), pageHelp()};
+        for (View p : pages) {
+            p.setVisibility(View.GONE);
+            content.addView(p, new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        }
+
+        shell.addView(navBar(), new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        showPage(0);
+        return shell;
+    }
+
+    private LinearLayout column() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(24), dp(32), dp(24), dp(32));
-        scroll.addView(root);
+        root.setPadding(dp(20), dp(18), dp(20), dp(24));
+        return root;
+    }
 
-        TextView title = new TextView(this);
-        title.setText("Wireless ADB Keeper");
-        title.setTextSize(24);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        root.addView(title);
+    private ScrollView scrollOf(View content) {
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.addView(content);
+        return scroll;
+    }
 
-        TextView subtitle = new TextView(this);
-        subtitle.setText("Keeps Android wireless debugging enabled whenever Wi-Fi is connected, "
-                + "and reconnects to your chosen network automatically.");
-        subtitle.setTextSize(14);
-        subtitle.setPadding(0, dp(6), 0, dp(16));
-        root.addView(subtitle);
+    private void pageHeader(LinearLayout root, String title, String caption) {
+        TextView overline = text("WIRELESS ADB KEEPER", 10, MUTED);
+        overline.setTypeface(Typeface.DEFAULT_BOLD);
+        overline.setLetterSpacing(0.12f);
+        root.addView(overline);
 
-        status = new TextView(this);
-        status.setTextSize(14);
-        status.setTypeface(Typeface.MONOSPACE);
-        status.setPadding(dp(12), dp(12), dp(12), dp(12));
-        root.addView(status, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        TextView t = text(title, 24, TEXT);
+        t.setTypeface(Typeface.DEFAULT_BOLD);
+        t.setLayoutParams(spaced(matchWrap(), 2));
+        root.addView(t);
+        TextView c = text(caption, 14, MUTED);
+        c.setLineSpacing(dp(2), 1f);
+        c.setLayoutParams(spaced(matchWrap(), 4));
+        root.addView(c);
+    }
 
-        root.addView(button("Enable now", new View.OnClickListener() {
+    private View pageStatus() {
+        LinearLayout root = column();
+        pageHeader(root, "Status", "Live state of the keeper. Green means healthy.");
+
+        root.addView(sectionLabel("Overview"));
+        statusBox = new LinearLayout(this);
+        statusBox.setOrientation(LinearLayout.VERTICAL);
+        statusBox.setBackground(rounded(CARD_BG, dp(14), 0, 0));
+        statusBox.setPadding(dp(16), dp(6), dp(16), dp(6));
+        root.addView(statusBox, matchWrap());
+
+        root.addView(sectionLabel("Actions"));
+        root.addView(primary("Enable now", new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 ensureAndRefresh();
-            }
-        }));
-
-        root.addView(button("Pin adb port " + PinnedPort.PORT + " now", new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        final String state = PinnedPort.force(MainActivity.this);
-                        handler.post(new Runnable() {
-                            @Override
-                            public void run() {
-                                toast("Pinned port: " + state);
-                                refreshStatus();
-                            }
-                        });
-                    }
-                }).start();
             }
         }));
 
@@ -124,23 +187,16 @@ public class MainActivity extends Activity {
             }
         });
         root.addView(serviceButton);
+        return scrollOf(root);
+    }
 
-        localButton = button("Connect mode: auto-connect", new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                boolean toLocal = LocalWifi.isAutoMode(MainActivity.this);
-                LocalWifi.setMode(MainActivity.this,
-                        toLocal ? LocalWifi.MODE_LOCAL : LocalWifi.MODE_AUTO);
-                sendServiceAction(MonitorService.ACTION_RELOAD_LOCAL);
-                toast(toLocal
-                        ? "Local-only mode: needs a tap + password each reconnect"
-                        : "Auto-connect mode: system reconnects silently");
-                refreshStatus();
-            }
-        });
-        root.addView(localButton);
+    private View pageConnect() {
+        LinearLayout root = column();
+        pageHeader(root, "Connect",
+                "Choose how this phone rejoins Wi-Fi and keep the adb port stable.");
 
-        root.addView(button("Connect now", new View.OnClickListener() {
+        root.addView(sectionLabel("Reconnect"));
+        root.addView(primary("Connect now", new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 if (!LocalWifi.isAutoMode(MainActivity.this) && !LocalWifi.supported()) {
@@ -165,24 +221,66 @@ public class MainActivity extends Activity {
             }
         }));
 
-        ssidField = new EditText(this);
-        ssidField.setHint("SSID for the local-only link");
+        localButton = button("Connect mode: auto-connect", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                boolean toLocal = LocalWifi.isAutoMode(MainActivity.this);
+                LocalWifi.setMode(MainActivity.this,
+                        toLocal ? LocalWifi.MODE_LOCAL : LocalWifi.MODE_AUTO);
+                sendServiceAction(MonitorService.ACTION_RELOAD_LOCAL);
+                toast(toLocal
+                        ? "Local-only mode: needs a tap + password each reconnect"
+                        : "Auto-connect mode: system reconnects silently");
+                refreshStatus();
+            }
+        });
+        root.addView(localButton);
+
+        root.addView(sectionLabel("ADB port"));
+        root.addView(button("Pin adb port " + PinnedPort.PORT + " now", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        final String state = PinnedPort.force(MainActivity.this);
+                        handler.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                toast("Pinned port: " + state);
+                                refreshStatus();
+                            }
+                        });
+                    }
+                }).start();
+            }
+        }));
+
+        return scrollOf(root);
+    }
+
+    private View pageNetwork() {
+        LinearLayout root = column();
+        pageHeader(root, "Network",
+                "Credentials the app needs when Android cannot reconnect on its own.");
+
+        root.addView(sectionLabel("Saved network"));
+        ssidField = field("SSID", InputType.TYPE_CLASS_TEXT);
         ssidField.setText(LocalWifi.ssid(this));
-        LinearLayout.LayoutParams ssidLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        ssidLp.topMargin = dp(12);
-        ssidField.setLayoutParams(ssidLp);
+        ssidField.setLayoutParams(spaced(matchWrap(), 10));
         root.addView(ssidField);
 
-        passField = new EditText(this);
-        passField.setHint("Wi-Fi password (needed only if the app must connect it)");
-        passField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        passField = field("Password",
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         passField.setText(LocalWifi.passphrase(this));
-        LinearLayout.LayoutParams passLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        passLp.topMargin = dp(8);
-        passField.setLayoutParams(passLp);
+        passField.setLayoutParams(spaced(matchWrap(), 10));
         root.addView(passField);
+
+        TextView passHint = text("Only used in local-only mode, where Android asks for the "
+                + "password on every reconnect.", 12, MUTED);
+        passHint.setLayoutParams(spaced(matchWrap(), 6));
+        passHint.setLineSpacing(dp(2), 1f);
+        root.addView(passHint);
 
         root.addView(button("Save SSID and password", new View.OnClickListener() {
             @Override
@@ -195,7 +293,14 @@ public class MainActivity extends Activity {
                 refreshStatus();
             }
         }));
+        return scrollOf(root);
+    }
 
+    private View pageHelp() {
+        LinearLayout root = column();
+        pageHeader(root, "Help", "One-time setup, background behaviour, and options.");
+
+        root.addView(sectionLabel("Keep-alive"));
         root.addView(button("Schedule keep-alive (every 15 min)", new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -216,11 +321,8 @@ public class MainActivity extends Activity {
             }
         }));
 
-        TextView help = new TextView(this);
-        help.setTextSize(12);
-        help.setPadding(0, dp(20), 0, 0);
-        help.setTextIsSelectable(true);
-        help.setText("One-time setup (already done if the status shows permission granted):\n\n"
+        root.addView(sectionLabel("How it works"));
+        TextView help = text("One-time setup (already done if the status shows permission granted):\n\n"
                 + "adb shell pm grant com.example.wifidebug android.permission.WRITE_SECURE_SETTINGS\n\n"
                 + "How it works:\n"
                 + "- A foreground service watches for new Wi-Fi connections and re-enables wireless debugging immediately.\n"
@@ -236,20 +338,173 @@ public class MainActivity extends Activity {
                 + "send that command itself. One-time grant: pm grant com.example.wifidebug "
                 + "com.termux.permission.RUN_COMMAND\n"
                 + "- Only devices already paired with this phone can connect. "
-                + "Revoke pairings in Developer options if needed.");
+                + "Revoke pairings in Developer options if needed.", 12, MUTED);
+        help.setTextIsSelectable(true);
+        help.setLineSpacing(dp(3), 1f);
         root.addView(help);
+        return scrollOf(root);
+    }
 
-        return scroll;
+    private View navBar() {
+        LinearLayout wrapper = new LinearLayout(this);
+        wrapper.setOrientation(LinearLayout.VERTICAL);
+        wrapper.setBackgroundColor(0xFFFBFBFD);
+
+        View hairline = new View(this);
+        hairline.setBackgroundColor(HAIRLINE);
+        wrapper.addView(hairline, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(1)));
+        // targetSdk 35 draws edge to edge, so keep the bar above the system gesture area.
+        wrapper.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+            @Override
+            public WindowInsets onApplyWindowInsets(View v, WindowInsets insets) {
+                v.setPadding(0, 0, 0, insets.getSystemWindowInsetBottom());
+                return insets;
+            }
+        });
+
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        wrapper.addView(bar, matchWrap());
+
+        navIndicators = new View[PAGE_TITLES.length];
+        navLabels = new TextView[PAGE_TITLES.length];
+        for (int i = 0; i < PAGE_TITLES.length; i++) {
+            final int index = i;
+            LinearLayout item = new LinearLayout(this);
+            item.setOrientation(LinearLayout.VERTICAL);
+            item.setGravity(Gravity.CENTER_HORIZONTAL);
+            item.setPadding(0, dp(9), 0, dp(8));
+            item.setLayoutParams(new LinearLayout.LayoutParams(0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+            View indicator = new View(this);
+            indicator.setBackground(rounded(ACCENT, dp(2), 0, 0));
+            indicator.setVisibility(View.INVISIBLE);
+            LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(dp(24), dp(3));
+            ilp.gravity = Gravity.CENTER_HORIZONTAL;
+            item.addView(indicator, ilp);
+
+            TextView label = text(PAGE_TITLES[i], 12, MUTED);
+            label.setGravity(Gravity.CENTER);
+            label.setPadding(0, dp(7), 0, 0);
+            item.addView(label, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT));
+
+            item.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    showPage(index);
+                }
+            });
+            bar.addView(item);
+            navIndicators[i] = indicator;
+            navLabels[i] = label;
+        }
+        return wrapper;
+    }
+
+    private void showPage(int index) {
+        if (pages == null || index < 0 || index >= pages.length) return;
+        page = index;
+        for (int i = 0; i < pages.length; i++) {
+            boolean active = i == index;
+            pages[i].setVisibility(active ? View.VISIBLE : View.GONE);
+            if (navIndicators != null) {
+                navIndicators[i].setVisibility(active ? View.VISIBLE : View.INVISIBLE);
+            }
+            if (navLabels != null) {
+                navLabels[i].setTextColor(active ? ACCENT : MUTED);
+                navLabels[i].setTypeface(active ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+            }
+        }
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        outState.putInt(STATE_PAGE, page);
+    }
+
+    // Back returns to Status first; only then does it leave the app.
+    @Override
+    @SuppressWarnings("deprecation")
+    public void onBackPressed() {
+        if (page != 0) {
+            showPage(0);
+            return;
+        }
+        super.onBackPressed();
+    }
+
+    private TextView text(String value, int sp, int color) {
+        TextView t = new TextView(this);
+        t.setText(value);
+        t.setTextSize(sp);
+        t.setTextColor(color);
+        return t;
+    }
+
+    private TextView sectionLabel(String label) {
+        TextView t = text(label.toUpperCase(), 11, MUTED);
+        t.setTypeface(Typeface.DEFAULT_BOLD);
+        t.setLetterSpacing(0.08f);
+        LinearLayout.LayoutParams lp = matchWrap();
+        lp.topMargin = dp(26);
+        lp.bottomMargin = dp(8);
+        t.setLayoutParams(lp);
+        return t;
+    }
+
+    private GradientDrawable rounded(int color, int radius, int strokeWidth, int strokeColor) {
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(color);
+        d.setCornerRadius(radius);
+        if (strokeWidth > 0) d.setStroke(strokeWidth, strokeColor);
+        return d;
+    }
+
+    private LinearLayout.LayoutParams matchWrap() {
+        return new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+    }
+
+    private LinearLayout.LayoutParams spaced(LinearLayout.LayoutParams lp, int topDp) {
+        lp.topMargin = dp(topDp);
+        return lp;
+    }
+
+    private EditText field(String hint, int inputType) {
+        EditText e = new EditText(this);
+        e.setHint(hint);
+        e.setTextSize(15);
+        e.setSingleLine(true);
+        e.setInputType(inputType);
+        e.setBackgroundTintList(ColorStateList.valueOf(HAIRLINE));
+        e.setLayoutParams(matchWrap());
+        return e;
+    }
+
+    // One filled button for the thing people came to do, flat ones for the rest.
+    private Button primary(String label, View.OnClickListener listener) {
+        Button b = button(label, listener);
+        b.setBackgroundTintList(ColorStateList.valueOf(ACCENT));
+        b.setTextColor(Color.WHITE);
+        b.setTypeface(Typeface.DEFAULT_BOLD);
+        return b;
     }
 
     private Button button(String text, View.OnClickListener listener) {
         Button b = new Button(this);
         b.setText(text);
+        b.setAllCaps(false);
+        b.setTextSize(15);
+        b.setTextColor(TEXT);
+        b.setMinHeight(dp(46));
+        b.setBackgroundTintList(ColorStateList.valueOf(0xFFE5E7EB));
         b.setOnClickListener(listener);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dp(8);
-        b.setLayoutParams(lp);
+        b.setLayoutParams(spaced(matchWrap(), 8));
         return b;
     }
 
@@ -318,33 +573,31 @@ public class MainActivity extends Activity {
     }
 
     private void refreshStatus() {
-        if (status == null) return;
-        StringBuilder sb = new StringBuilder();
-        sb.append("Permission:  ").append(Ensurer.hasPermission(this) ? "granted" : "NOT granted").append('\n');
+        if (statusBox == null) return;
+        statusBox.removeAllViews();
+
+        boolean permission = Ensurer.hasPermission(this);
+        addRow("Permission", permission ? "granted" : "not granted", permission ? OK : BAD);
         if (LocalWifi.supported()) {
-            sb.append("Location:    ").append(LocalWifi.hasLocationPermission(this)
-                    ? "granted" : "NOT granted").append('\n');
+            boolean location = LocalWifi.hasLocationPermission(this);
+            addRow("Location", location ? "granted" : "not granted", location ? OK : BAD);
         }
-        sb.append("Wi-Fi:       ").append(Ensurer.isWifiConnected(this) ? "connected" : "not connected").append('\n');
-        sb.append("Wireless:    ").append(Ensurer.isWirelessDebuggingOn(this) ? "ON" : "OFF").append('\n');
-        sb.append("Service:     ").append(MonitorService.running ? "running" : "stopped").append('\n');
-        sb.append("Pin ").append(PinnedPort.PORT).append(":    ").append(PinnedPort.state()).append('\n');
-        if (LocalWifi.isAutoMode(this)) {
-            sb.append("Connect:     auto-connect (suggestion)");
-            if (MonitorService.running && LocalWifi.detail != null && !LocalWifi.detail.isEmpty()) {
-                sb.append(" (").append(LocalWifi.detail).append(')');
-            }
-            sb.append('\n');
-        } else {
-            sb.append("Connect:     local-only\n");
-            sb.append("Local link:  ").append(MonitorService.running ? LocalWifi.state : "off");
-            if (MonitorService.running && LocalWifi.detail != null && !LocalWifi.detail.isEmpty()) {
-                sb.append(" (").append(LocalWifi.detail).append(')');
-            }
-            sb.append('\n');
+        boolean wifi = Ensurer.isWifiConnected(this);
+        addRow("Wi-Fi", wifi ? "connected" : "not connected", wifi ? OK : null);
+        boolean wireless = Ensurer.isWirelessDebuggingOn(this);
+        addRow("Wireless", wireless ? "on" : "off", wireless ? OK : BAD);
+        boolean running = MonitorService.running;
+        addRow("Service", running ? "running" : "stopped", running ? OK : BAD);
+        addRow("Pinned port", PinnedPort.state());
+        addRow("Mode", LocalWifi.isAutoMode(this) ? "auto-connect" : "local-only");
+        if (!LocalWifi.isAutoMode(this)) {
+            addRow("Local link", running ? LocalWifi.state : "off");
         }
-        sb.append("Job:         ").append(isJobScheduled() ? "scheduled" : "not scheduled");
-        status.setText(sb.toString());
+        if (running && LocalWifi.detail != null && !LocalWifi.detail.isEmpty()) {
+            addRow("Last result", LocalWifi.detail);
+        }
+        addRow("Job", isJobScheduled() ? "scheduled" : "not scheduled");
+
         if (serviceButton != null) {
             serviceButton.setText(MonitorService.running ? "Stop monitor service" : "Start monitor service");
         }
@@ -352,6 +605,30 @@ public class MainActivity extends Activity {
             localButton.setText("Connect mode: "
                     + (LocalWifi.isAutoMode(this) ? "auto-connect" : "local-only"));
         }
+    }
+
+    private void addRow(String label, String value) {
+        addRow(label, value, null);
+    }
+
+    // A label column of fixed width keeps every value lined up without monospace.
+    private void addRow(String label, String value, Integer color) {
+        if (statusBox == null) return;
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(0, dp(7), 0, dp(7));
+
+        TextView name = text(label, 13, MUTED);
+        name.setLayoutParams(new LinearLayout.LayoutParams(
+                dp(112), LinearLayout.LayoutParams.WRAP_CONTENT));
+        row.addView(name);
+
+        TextView val = text(value, 14, color == null ? TEXT : color);
+        val.setLayoutParams(new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        row.addView(val);
+
+        statusBox.addView(row, matchWrap());
     }
 
     private boolean isJobScheduled() {
