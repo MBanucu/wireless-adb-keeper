@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/data/data/com.termux/files/usr/bin/bash
 # autostart-allow.sh -- allowlist a package in DokeOS's autostart manager over adb.
 #
 #   ./autostart-allow.sh "Phone link proxy"        # by the label DokeOS shows

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/data/data/com.termux/files/usr/bin/bash
 # prelock-eval.sh -- wait for a booted, still-locked phone, give the network
 # 10 seconds to come up, then say what is reachable before the first unlock.
 #
