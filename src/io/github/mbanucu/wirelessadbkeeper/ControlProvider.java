@@ -2,6 +2,7 @@ package io.github.mbanucu.wirelessadbkeeper;
 
 import android.content.ContentProvider;
 import android.content.ContentValues;
+import android.content.Context;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Binder;
@@ -18,15 +19,21 @@ import java.util.Map;
  *       --method status
  *   adb shell content call --uri ... --method enable
  *
- * A content provider rather than a broadcast receiver because these commands
- * have to work when the app was force-stopped or only just installed: the
- * platform drops broadcasts to an app in that state, but a provider is started
- * on demand. It also keeps the caller's uid visible, so the guard below is a
- * real check and not a guess.
+ * The provider is the path that works when the app was force-stopped or only
+ * just installed: the platform drops broadcasts to an app in that state, but a
+ * provider is started on demand. It also keeps the caller's uid visible, so the
+ * guard below is a real check and not a guess. {@link ControlReceiver} is the
+ * app-reachable twin for the case the `content` command cannot serve.
  *
  * The reply bundle carries "code" (0 ok, 4xx/5xx error) and "data": one
  * key=value line per field for `status` and `pubkey`, one line for everything
  * else.
+ *
+ * <p>The caller gate is uid based (shell/root/system/self) with a control token
+ * as the alternative for an ordinary app. {@code --method token} mints that
+ * token and is shell-only. {@link ControlReceiver} runs the same dispatch over
+ * an ordered broadcast, because the `content` command cannot be used from an
+ * app uid.
  */
 public class ControlProvider extends ContentProvider {
     private static final String TAG = Ensurer.TAG;
@@ -43,17 +50,47 @@ public class ControlProvider extends ContentProvider {
 
     @Override
     public Bundle call(String method, String arg, Bundle extras) {
-        int sender = Binder.getCallingUid();
-        if (sender != UID_ROOT && sender != UID_SYSTEM && sender != UID_SHELL
-                && sender != Process.myUid()) {
-            Log.w(TAG, "control: refused uid " + sender + " for " + method);
-            return reply(403, "error=refused: only adb shell, root or system may control the app");
+        Result r = handle(getContext(), Binder.getCallingUid(), method, arg, extras);
+        return reply(r.code, r.data);
+    }
+
+    /**
+     * The gate and dispatch shared with {@link ControlReceiver}.
+     *
+     * <p>The uid check stays first: shell, root, system and the app itself do
+     * not need a token, so every command that worked before still works. An
+     * ordinary app may present the token instead. A missing token and a wrong
+     * token take the same path and produce the same 403; only the shell-only
+     * "token" method ever mints one.
+     */
+    static Result handle(Context c, int sender, String method, String arg, Bundle extras) {
+        Bundle in = extras == null ? Bundle.EMPTY : extras;
+        String token = in.getString("token");
+        boolean privileged = sender == UID_ROOT || sender == UID_SYSTEM
+                || sender == UID_SHELL || sender == Process.myUid();
+        boolean tokenOk = !privileged && ControlToken.accept(c, token);
+        if (!privileged && !tokenOk) {
+            Log.w(TAG, "control: refused " + caller(sender)
+                    + " token=" + presented(token) + " for " + method);
+            return new Result(403, "error=refused: control needs adb shell, root,"
+                    + " system or a valid control token");
         }
         if (method == null) {
-            return reply(400, "error=missing method; use status, enable, wifi_on, pubkey, ...");
+            return new Result(400, "error=missing method; use status, enable, wifi_on, pubkey, ...");
         }
+        if (!privileged && ("token".equals(method) || "pubkey".equals(method))) {
+            // Both mint or reveal identity material. A token holder is trusted
+            // to control the keeper, not to bootstrap another copy of itself.
+            Log.w(TAG, "control: refused " + caller(sender)
+                    + " token=" + presented(token)
+                    + " for shell-only " + method);
+            return new Result(403, "error=refused: " + method
+                    + " may only be requested from adb shell, root or system");
+        }
+        Log.i(TAG, "control: accepted " + caller(sender)
+                + " token=" + presented(token)
+                + " via " + (privileged ? "uid" : "token") + " for " + method);
 
-        Bundle in = extras == null ? Bundle.EMPTY : extras;
         // The positional value is the SSID for save_wifi and the mode for
         // set_mode; the password only travels as a named extra. Reading the mode
         // only from the extras made `keeper.sh mode local` pass null, which
@@ -63,21 +100,49 @@ public class ControlProvider extends ContentProvider {
         String ssid = in.getString("ssid", "save_wifi".equals(method) ? arg : null);
         String passphrase = in.getString("passphrase");
 
-        int code;
-        String data;
         try {
-            data = execute(getContext(), method, mode, ssid, passphrase);
-            code = data.startsWith("error=") ? 400 : 0;
+            String data = "token".equals(method) ? tokenReply(c)
+                    : execute(c, method, mode, ssid, passphrase);
+            int code = data.startsWith("error=") ? 400 : 0;
+            if ("token".equals(method)) {
+                // The one reply that is the secret. Keep it out of logcat even
+                // though the accept/refuse lines above are useful.
+                Log.i(TAG, "control token: "
+                        + (code == 0 ? "minted (not logged)" : oneLine(data)));
+            } else {
+                Log.i(TAG, "control " + method + ": " + oneLine(data));
+            }
+            return new Result(code, data);
         } catch (Throwable t) {
             Log.e(TAG, "control failed", t);
-            code = 500;
-            data = "error=" + t;
+            return new Result(500, "error=" + t);
         }
-        Log.i(TAG, "control " + method + ": " + oneLine(data));
-        return reply(code, data);
     }
 
-    private static String execute(android.content.Context c, String method, String mode,
+    /** The provider has a uid; the broadcast path passes -1 and uses the token. */
+    private static String caller(int sender) {
+        return sender < 0 ? "broadcast sender" : "uid " + sender;
+    }
+
+    /**
+     * Whether a token was presented, for the log. Not even a prefix: a valid
+     * token's characters are the one thing that must not reach logcat.
+     */
+    private static String presented(String token) {
+        return token == null || token.isEmpty() ? "none" : "present";
+    }
+
+    /** The shell-only reply: the token plus where it lives, never logged. */
+    private static String tokenReply(Context c) {
+        try {
+            return "token=" + ControlToken.issue(c)
+                    + "\npath=" + ControlToken.file(c);
+        } catch (Exception e) {
+            return "error=" + e.getMessage();
+        }
+    }
+
+    private static String execute(Context c, String method, String mode,
                                   String ssid, String passphrase) {
         if ("status".equals(method)) {
             return format(Keeper.status(c));
@@ -137,6 +202,17 @@ public class ControlProvider extends ContentProvider {
         out.putInt("code", code);
         out.putString("data", data);
         return out;
+    }
+
+    /** The provider wraps this in a Bundle; the broadcast returns it directly. */
+    static final class Result {
+        final int code;
+        final String data;
+
+        Result(int code, String data) {
+            this.code = code;
+            this.data = data;
+        }
     }
 
     // Nothing is stored here; these exist because a provider must implement them.

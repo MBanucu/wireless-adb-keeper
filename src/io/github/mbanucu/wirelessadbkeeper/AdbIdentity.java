@@ -116,8 +116,8 @@ public final class AdbIdentity {
         restrict(file, false);
     }
 
-    /** Owner-only permissions; the key is the app's identity. */
-    private static void restrict(File file, boolean directory) {
+    /** Owner-only permissions; the key and the control token are both secrets. */
+    static void restrict(File file, boolean directory) {
         file.setReadable(false, false);
         file.setWritable(false, false);
         file.setExecutable(false, false);

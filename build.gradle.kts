@@ -109,16 +109,17 @@ tasks.named("preBuild") {
 // ---------------------------------------------------------------------------
 // Host probes (tools/)
 //
-// tools/AdbProbe.java and tools/IdentityProbe.java are diagnostics that used to
-// need a hand-written javac line. They are not part of the APK: they get their
-// own compile step, against the same android.jar AGP compiles the app with, and
-// a JavaExec task each. AdbIdentity imports android.content.Context, so the jar
-// is on the probe classpath even though the probe never touches Context (the
-// device-protected directory it uses needs a real device).
+// tools/AdbProbe.java, IdentityProbe.java and TokenProbe.java are diagnostics
+// that used to need a hand-written javac line. They are not part of the APK:
+// they get their own compile step, against the same android.jar AGP compiles
+// the app with, and a JavaExec task each. AdbIdentity and ControlToken import
+// android.content.Context, so the jar is on the probe classpath even though the
+// probes never touch Context (the device-protected directory they use needs a
+// real device).
 //
 // No test dependency is declared on purpose: JUnit is not in the offline Gradle
-// cache, so `test` would stop resolving on the phone. `probeIdentity` is the
-// zero-dependency stand-in, and `test`/`check` depend on it.
+// cache, so `test` would stop resolving on the phone. The probes are the
+// zero-dependency stand-in, and `test`/`check` depend on them.
 // ---------------------------------------------------------------------------
 val probeClasses = layout.buildDirectory.dir("probe/classes")
 val bootClasspath = androidComponents.sdkComponents.bootClasspath
@@ -133,6 +134,7 @@ val compileProbes = tasks.register<JavaCompile>("compileProbes") {
         file("src/io/github/mbanucu/wirelessadbkeeper/AdbIdentity.java"),
         file("src/io/github/mbanucu/wirelessadbkeeper/AdbCertificate.java"),
         file("src/io/github/mbanucu/wirelessadbkeeper/Base64Codec.java"),
+        file("src/io/github/mbanucu/wirelessadbkeeper/ControlToken.java"),
     )
     classpath = files(bootClasspath)
     destinationDirectory.set(probeClasses)
@@ -148,6 +150,15 @@ val probeIdentity = tasks.register<JavaExec>("probeIdentity") {
     classpath = files(probeClasses, bootClasspath)
     mainClass.set("io.github.mbanucu.wirelessadbkeeper.IdentityProbe")
     args(layout.buildDirectory.dir("probe/identity").get().asFile.absolutePath)
+}
+
+val probeToken = tasks.register<JavaExec>("probeToken") {
+    group = "verification"
+    description = "Runs TokenProbe (ControlToken); needs no device."
+    dependsOn(compileProbes)
+    classpath = files(probeClasses, bootClasspath)
+    mainClass.set("io.github.mbanucu.wirelessadbkeeper.TokenProbe")
+    args(layout.buildDirectory.dir("probe/token").get().asFile.absolutePath)
 }
 
 val probeAdb = tasks.register<JavaExec>("probeAdb") {
@@ -171,8 +182,8 @@ val probeAdb = tasks.register<JavaExec>("probeAdb") {
 // fail on a machine with no adbd listening on 5555.
 tasks.register("probe") {
     group = "verification"
-    description = "Runs the device-free host probes (IdentityProbe)."
-    dependsOn(probeIdentity)
+    description = "Runs the device-free host probes (IdentityProbe, TokenProbe)."
+    dependsOn(probeIdentity, probeToken)
 }
 
 // `check` stays the standard entry point, and it now includes the probe. AGP
@@ -180,8 +191,8 @@ tasks.register("probe") {
 // named; that keeps `./gradlew test` meaningful even though there is no JUnit
 // dependency to run.
 tasks.matching { it.name == "test" }.configureEach {
-    dependsOn(probeIdentity)
+    dependsOn(probeIdentity, probeToken)
 }
 tasks.named("check") {
-    dependsOn(probeIdentity)
+    dependsOn(probeIdentity, probeToken)
 }
