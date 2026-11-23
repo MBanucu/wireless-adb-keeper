@@ -114,7 +114,9 @@ unlock; unlocking is then only needed for the laptop's own uplink.
 
 The script creates `debug.keystore` on first run and signs `wifidebug.apk`. If
 `android.jar` is not next to `build.sh`, the newest one under
-`$HOME/android-sdk/platforms/` is used.
+`$HOME/android-sdk/platforms/` is used. The manifest is also the source of
+`d8 --min-api`: the script reads `android:minSdkVersion` from it instead of
+hardcoding an API level, so a `minSdk` bump cannot leave the dex behind.
 
 Updating an installed copy needs the **same signing key**: pass `--ks` to
 `apksigner` with the key the installed build was signed with, or Android refuses the
@@ -142,6 +144,27 @@ removed. Output goes to `build-gradle/` because `build.sh` owns `build/`.
 `aapt2` AGP ships is x86_64. The Gradle debug APK is signed with the SDK's
 `~/.android/debug.keystore`, not the `debug.keystore` `build.sh` creates, so it
 will not update an installed `build.sh` build.
+
+### Probes and CI
+
+`tools/` holds two host-side diagnostics. Gradle compiles them against the
+app's `android.jar`, so neither needs a hand-written `javac` line:
+
+```bash
+./gradlew probe       # IdentityProbe: AdbKey/AdbIdentity/Base64Codec, no device
+./gradlew probeAdb    # AdbProbe: needs a phone with adbd on 127.0.0.1:5555
+./gradlew probeAdb -PadbKey=$HOME/.android/adbkey -PadbPort=5555 -PadbPinPort=5555
+./gradlew probeAdb -PadbTcpip=true   # also sends `tcpip:5555` and times the re-pin
+```
+
+`probe` runs only what can run without a phone; `test` and `check` depend on it.
+`probeAdb` stays manual and is never part of CI. There is deliberately no JUnit
+dependency: it does not resolve from the offline Gradle cache this project builds
+from on the phone, so the probe stands in for the unit tests.
+
+`.github/workflows/build.yml` runs `./gradlew test lint assembleDebug` on every
+push and pull request, on JDK 17 with the Android SDK. It needs no device, and it
+does not run `build.sh`, which remains the on-phone path.
 
 ### Pairing
 

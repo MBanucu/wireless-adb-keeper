@@ -7,6 +7,10 @@
 // is canonical because build.sh feeds it to aapt directly; AGP 9 owns the package
 // name and the version fields now, so this build stages a copy with those
 // attributes removed (and the <uses-sdk> element, which comes from defaultConfig).
+
+import org.gradle.api.tasks.JavaExec
+import org.gradle.api.tasks.compile.JavaCompile
+
 plugins {
     // 9.x is the line that runs on Gradle 9.6+: AGP 8.x uses a Gradle internal
     // API that was removed there, and Termux packages Gradle 9.9.2. This pair is
@@ -100,4 +104,83 @@ dependencies {
 
 tasks.named("preBuild") {
     dependsOn(stageManifest)
+}
+
+// ---------------------------------------------------------------------------
+// Host probes (tools/)
+//
+// tools/AdbProbe.java and tools/IdentityProbe.java are diagnostics that used to
+// need a hand-written javac line. They are not part of the APK: they get their
+// own compile step, against the same android.jar AGP compiles the app with, and
+// a JavaExec task each. AdbIdentity imports android.content.Context, so the jar
+// is on the probe classpath even though the probe never touches Context (the
+// device-protected directory it uses needs a real device).
+//
+// No test dependency is declared on purpose: JUnit is not in the offline Gradle
+// cache, so `test` would stop resolving on the phone. `probeIdentity` is the
+// zero-dependency stand-in, and `test`/`check` depend on it.
+// ---------------------------------------------------------------------------
+val probeClasses = layout.buildDirectory.dir("probe/classes")
+val bootClasspath = androidComponents.sdkComponents.bootClasspath
+
+val compileProbes = tasks.register<JavaCompile>("compileProbes") {
+    group = "verification"
+    description = "Compiles tools/*.java and the src classes they exercise."
+    source(
+        fileTree("tools") { include("*.java") },
+        file("src/io/github/mbanucu/wirelessadbkeeper/AdbKey.java"),
+        file("src/io/github/mbanucu/wirelessadbkeeper/AdbClient.java"),
+        file("src/io/github/mbanucu/wirelessadbkeeper/AdbIdentity.java"),
+        file("src/io/github/mbanucu/wirelessadbkeeper/Base64Codec.java"),
+    )
+    classpath = files(bootClasspath)
+    destinationDirectory.set(probeClasses)
+    sourceCompatibility = "17"
+    targetCompatibility = "17"
+    options.encoding = "UTF-8"
+}
+
+val probeIdentity = tasks.register<JavaExec>("probeIdentity") {
+    group = "verification"
+    description = "Runs IdentityProbe (AdbKey, AdbIdentity, Base64Codec); needs no device."
+    dependsOn(compileProbes)
+    classpath = files(probeClasses, bootClasspath)
+    mainClass.set("io.github.mbanucu.wirelessadbkeeper.IdentityProbe")
+    args(layout.buildDirectory.dir("probe/identity").get().asFile.absolutePath)
+}
+
+val probeAdb = tasks.register<JavaExec>("probeAdb") {
+    group = "verification"
+    description = "Runs AdbProbe against adbd on the loopback; needs a phone and is never part of CI."
+    dependsOn(compileProbes)
+    classpath = files(probeClasses, bootClasspath)
+    mainClass.set("io.github.mbanucu.wirelessadbkeeper.AdbProbe")
+    args(
+        providers.gradleProperty("adbKey")
+            .orElse("${System.getProperty("user.home")}/.android/adbkey").get(),
+        providers.gradleProperty("adbPort").orElse("5555").get(),
+        providers.gradleProperty("adbPinPort").orElse("5555").get(),
+    )
+    if (providers.gradleProperty("adbTcpip").map { it.toBoolean() }.orElse(false).get()) {
+        args("--tcpip")
+    }
+}
+
+// One name for "run what can run without a phone". probeAdb stays out: it would
+// fail on a machine with no adbd listening on 5555.
+tasks.register("probe") {
+    group = "verification"
+    description = "Runs the device-free host probes (IdentityProbe)."
+    dependsOn(probeIdentity)
+}
+
+// `check` stays the standard entry point, and it now includes the probe. AGP
+// registers `test` lazily (after this script runs), so it is matched rather than
+// named; that keeps `./gradlew test` meaningful even though there is no JUnit
+// dependency to run.
+tasks.matching { it.name == "test" }.configureEach {
+    dependsOn(probeIdentity)
+}
+tasks.named("check") {
+    dependsOn(probeIdentity)
 }
