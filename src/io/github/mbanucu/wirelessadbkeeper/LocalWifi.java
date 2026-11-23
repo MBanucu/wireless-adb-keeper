@@ -313,6 +313,7 @@ public final class LocalWifi {
             @Override
             public void onAvailable(Network n) {
                 if (callback != this) return;
+                Diag.verbose(context, VerboseLog.NETWORK, "local link available: " + target);
                 network = n;
                 requesting = false;
                 backoff.success();
@@ -331,6 +332,7 @@ public final class LocalWifi {
             @Override
             public void onLost(Network n) {
                 if (callback != this) return;
+                Diag.verbose(context, VerboseLog.NETWORK, "local link lost: " + target);
                 network = null;
                 requesting = false;
                 state = "lost";
@@ -345,6 +347,8 @@ public final class LocalWifi {
             @Override
             public void onUnavailable() {
                 if (callback != this) return;
+                Diag.verbose(context, VerboseLog.NETWORK, "local link unavailable (attempt "
+                        + backoff.attempts() + ", " + security + "): " + target);
                 requesting = false;
                 backoff.failed();
                 useWpa3 = !useWpa3;

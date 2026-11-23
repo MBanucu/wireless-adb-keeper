@@ -115,8 +115,11 @@ public final class PinnedPort {
     }
 
     public static boolean termuxUsable(Context c) {
-        return hasTermux(c)
-                && c.checkSelfPermission(TERMUX_PERM) == PackageManager.PERMISSION_GRANTED;
+        return hasTermux(c) && hasTermuxPermission(c);
+    }
+
+    private static boolean hasTermuxPermission(Context c) {
+        return c.checkSelfPermission(TERMUX_PERM) == PackageManager.PERMISSION_GRANTED;
     }
 
     /** Runs a Termux script on the app's behalf; used by {@link WifiRadio}. */
@@ -135,7 +138,11 @@ public final class PinnedPort {
     }
 
     private static String check(Context c, boolean force) {
+        boolean installed = hasTermux(c);
+        boolean usable = installed && hasTermuxPermission(c);
+        String termux = !installed ? "missing" : usable ? "usable" : "no_permission";
         if (isListening()) {
+            noteVerbose(c, "tick port=open termux=" + termux + " action=listen");
             noteProbeFallback(c);
             TermuxResult r = lastResult;
             String state;
@@ -147,14 +154,16 @@ public final class PinnedPort {
             journal(c, "info", "pin.state", state);
             return state;
         }
-        if (!hasTermux(c)) {
+        if (!installed) {
+            noteVerbose(c, "tick port=closed termux=missing action=no_termux");
             String state = setState("closed (Termux not installed; install it from F-Droid)");
             journal(c, "warn", "pin.termux_missing",
                     "Termux not installed; fix: install Termux from F-Droid, then set"
                             + " allow-external-apps=true");
             return state;
         }
-        if (!termuxUsable(c)) {
+        if (!usable) {
+            noteVerbose(c, "tick port=closed termux=no_permission action=no_permission");
             String fix = PermissionAudit.grantCommand(c.getPackageName(), TERMUX_PERM);
             String state = setState("closed (grant " + TERMUX_PERM + "; fix: " + fix + ")");
             journal(c, "warn", "pin.no_permission",
@@ -169,18 +178,25 @@ public final class PinnedPort {
             journal(c, "warn", "pin.port_closed", "script reports pinned but 127.0.0.1:"
                     + PORT + " is closed: " + fresh.uiLine());
         }
+        long askedAgoMs = -1L;
         synchronized (LOCK) {
             long now = SystemClock.elapsedRealtime();
             if (!force && now - lastAsk < MIN_INTERVAL_MS) {
                 state = closedState("closed (asked Termux, waiting)");
-                return state;
+                askedAgoMs = now - lastAsk;
+            } else {
+                // Claim the interval before the intent leaves the process. A
+                // second caller that also found the port closed now sees a
+                // fresh lastAsk and does not ask Termux inside the same window.
+                // The intent is sent below, outside this lock.
+                lastAsk = now;
+                lastAskAt = now;
             }
-            // Claim the interval before the intent leaves the process. A second
-            // caller that also found the port closed now sees a fresh lastAsk
-            // and does not ask Termux inside the same window. The intent is
-            // sent below, outside this lock.
-            lastAsk = now;
-            lastAskAt = now;
+        }
+        if (askedAgoMs >= 0) {
+            noteVerbose(c, "tick port=closed termux=usable action=wait asked_ago_s="
+                    + (askedAgoMs / 1000));
+            return state;
         }
         // The ask itself is network/unbounded work; a failure still settles the
         // window so a refused background start is not retried in a tight loop.
@@ -190,15 +206,22 @@ public final class PinnedPort {
                     ? "closed (asked Termux)" : "closed (could not reach Termux)");
         }
         if (!asked) {
+            noteVerbose(c, "tick port=closed termux=usable action=ask_refused");
             journal(c, "warn", "pin.run_refused",
                     "Termux RUN_COMMAND was refused; set allow-external-apps=true in"
                             + " ~/.termux/termux.properties and check "
                             + TERMUX_PERM);
         } else {
+            noteVerbose(c, "tick port=closed termux=usable action=asked");
             journal(c, "info", "pin.waiting",
                     "asked Termux to pin port " + PORT + "; waiting for the port or result");
         }
         return state;
+    }
+
+    /** The verbose counterpart of {@link #journal}: every tick, never deduplicated. */
+    private static void noteVerbose(Context c, String detail) {
+        Diag.verbose(c, VerboseLog.PIN, detail);
     }
 
     /** Journals a pin event once per distinct reason; the probe runs every 10 s. */
