@@ -322,7 +322,12 @@ public final class ProfileTable {
         String legacy = clean(store.get(LEGACY_SSID_KEY));
         if (legacy == null || legacy.isEmpty()) return;
 
-        secrets.adoptLegacy(secretSlot(DEFAULT_ID));
+        if (!secrets.adoptLegacy(secretSlot(DEFAULT_ID))) {
+            // The Keystore could not seal the old passphrase. Leave the legacy
+            // keys and write no marker, so the next read retries instead of
+            // creating an active profile with no password.
+            return;
+        }
         Map<String, String> puts = new LinkedHashMap<>();
         puts.put(IDS_KEY, DEFAULT_ID);
         puts.put(ssidKey(DEFAULT_ID), legacy);

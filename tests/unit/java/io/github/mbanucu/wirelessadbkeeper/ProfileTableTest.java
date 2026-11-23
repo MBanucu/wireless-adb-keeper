@@ -25,6 +25,7 @@ public final class ProfileTableTest {
     public static void main(String[] args) {
         migrationMovesTheLegacyNetworkToDefault();
         migrationWithoutALegacyNetworkDoesNothing();
+        migrationSecretFailureRetriesLater();
         capRefusesTheSeventeenthAndKeepsTheSixteen();
         saveBySsidUpdatesInsteadOfDuplicating();
         renameKeepsTheIdAndRejectsADuplicateTarget();
@@ -71,6 +72,29 @@ public final class ProfileTableTest {
         check("a fresh install does not write a marker", null,
                 store.values.get(ProfileTable.IDS_KEY));
         check("a fresh install has no active profile", null, table.active());
+    }
+
+    private static void migrationSecretFailureRetriesLater() {
+        MapStore store = new MapStore();
+        MapSecrets secrets = new MapSecrets();
+        store.values.put(ProfileTable.LEGACY_SSID_KEY, "Home");
+        secrets.legacy = "secret";
+        secrets.failPut = true;
+
+        ProfileTable table = new ProfileTable(store, secrets);
+        check("a failed migration creates no profile", 0, table.list().size());
+        check("a failed migration writes no id marker", null,
+                store.values.get(ProfileTable.IDS_KEY));
+        check("a failed migration leaves the legacy SSID", "Home",
+                store.values.get(ProfileTable.LEGACY_SSID_KEY));
+        check("a failed migration leaves the legacy secret", "secret", secrets.legacy);
+
+        secrets.failPut = false;
+        List<Profile> migrated = table.list();
+        check("the next read retries the migration", 1, migrated.size());
+        check("the retried migration keeps the SSID", "Home", migrated.get(0).ssid());
+        check("the retried migration keeps the secret", "secret",
+                secrets.slots.get(ProfileTable.secretSlot("default")));
     }
 
     private static void capRefusesTheSeventeenthAndKeepsTheSixteen() {
