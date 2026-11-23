@@ -5,8 +5,10 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.database.ContentObserver;
 import android.net.ConnectivityManager;
 import android.net.Network;
@@ -17,6 +19,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.UserManager;
 import android.provider.Settings;
 import android.util.Log;
 
@@ -33,10 +36,13 @@ public class MonitorService extends Service {
     private Handler handler;
     private ConnectivityManager.NetworkCallback networkCallback;
     private ContentObserver observer;
+    private BroadcastReceiver unlockReceiver;
     private Runnable ensureRunnable;
     private Runnable pinTick;
     private String pendingReason = "";
     private LocalWifi localWifi;
+    /** Whether the credential-protected Wi-Fi mode has been applied. */
+    private boolean applied;
 
     @Override
     public void onCreate() {
@@ -54,13 +60,48 @@ public class MonitorService extends Service {
         }
         registerNetworkCallback();
         registerSettingObserver();
-        applyMode("service created");
+        registerUnlockReceiver();
+        // The pin loop and Ensurer read no credential-protected app storage, so
+        // they can run at LOCKED_BOOT_COMPLETED. The mode comes from credential-
+        // protected prefs and has to wait for the first unlock.
+        if (userUnlocked()) {
+            applyMode("service created");
+        }
         scheduleEnsure("service created", 0);
         startPinLoop(8000);
-        Log.i(Ensurer.TAG, "MonitorService started");
+        Log.i(Ensurer.TAG, "MonitorService started"
+                + (userUnlocked() ? "" : " (before unlock)"));
+    }
+
+    /** True once credential-encrypted storage and the Wi-Fi prefs are readable. */
+    private boolean userUnlocked() {
+        UserManager um = (UserManager) getSystemService(Context.USER_SERVICE);
+        return um == null || um.isUserUnlocked();
+    }
+
+    private void registerUnlockReceiver() {
+        unlockReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                Log.i(Ensurer.TAG, "user unlocked; applying saved Wi-Fi mode");
+                applyMode("user unlocked");
+                scheduleEnsure("user unlocked", 0);
+            }
+        };
+        IntentFilter filter = new IntentFilter(Intent.ACTION_USER_UNLOCKED);
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(unlockReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(unlockReceiver, filter);
+            }
+        } catch (Exception e) {
+            Log.e(Ensurer.TAG, "could not register unlock receiver", e);
+        }
     }
 
     private void applyMode(String reason) {
+        applied = true;
         if (LocalWifi.isAutoMode(this)) {
             if (localWifi != null) {
                 localWifi.stop();
@@ -135,7 +176,9 @@ public class MonitorService extends Service {
 
     private String notificationText() {
         String base = "Keeping wireless debugging enabled";
-        if (LocalWifi.isAutoMode(this)) {
+        // The mode lives in credential-protected prefs; before unlock the
+        // notification must not read them.
+        if (userUnlocked() && LocalWifi.isAutoMode(this)) {
             return base + " - auto-connect via suggestion";
         }
         if (localWifi == null) return base;
@@ -228,9 +271,10 @@ public class MonitorService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
-        if (ACTION_RELOAD_LOCAL.equals(action)) {
+        boolean unlocked = userUnlocked();
+        if (ACTION_RELOAD_LOCAL.equals(action) && unlocked) {
             applyMode("settings changed");
-        } else if (ACTION_CONNECT_LOCAL.equals(action)) {
+        } else if (ACTION_CONNECT_LOCAL.equals(action) && unlocked) {
             if (LocalWifi.isAutoMode(this)) {
                 int status = WifiSuggestion.add(this);
                 LocalWifi.state = "auto";
@@ -242,11 +286,16 @@ public class MonitorService extends Service {
                 localWifi.retryNow();
                 updateNotification();
             }
-        } else if (localWifi != null && "no permission".equals(LocalWifi.state)
+        } else if (unlocked && localWifi != null && "no permission".equals(LocalWifi.state)
                 && LocalWifi.hasLocationPermission(this)) {
             // Permission was granted after the service started.
             localWifi.retryNow();
             updateNotification();
+        }
+        // BOOT_COMPLETED starts the service again after unlock, which is the
+        // fallback if the ACTION_USER_UNLOCKED receiver was missed.
+        if (unlocked && !applied) {
+            applyMode("start command");
         }
         scheduleEnsure("start command", 0);
         return START_STICKY;
@@ -313,6 +362,13 @@ public class MonitorService extends Service {
         }
         if (observer != null) {
             getContentResolver().unregisterContentObserver(observer);
+        }
+        if (unlockReceiver != null) {
+            try {
+                unregisterReceiver(unlockReceiver);
+            } catch (Exception ignored) {
+            }
+            unlockReceiver = null;
         }
         Log.i(Ensurer.TAG, "MonitorService stopped");
         super.onDestroy();

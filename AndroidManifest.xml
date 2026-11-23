@@ -52,10 +52,16 @@
             </intent-filter>
         </activity>
 
+        <!-- LOCKED_BOOT_COMPLETED is the reboot that matters: it runs before
+             the first unlock, so the key and the pin path are reachable there.
+             DokeOS does not inherit directBootAware from <application>, so it
+             has to be written on each component that runs before unlock. -->
         <receiver
             android:name=".BootReceiver"
+            android:directBootAware="true"
             android:exported="true">
             <intent-filter>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
@@ -86,6 +92,7 @@
              force-stop. Other apps do not hold that permission. -->
         <service
             android:name=".MonitorService"
+            android:directBootAware="true"
             android:exported="true"
             android:permission="android.permission.WRITE_SECURE_SETTINGS"
             android:foregroundServiceType="specialUse">
@@ -94,8 +101,11 @@
                 android:value="keeps wireless debugging reachable for the paired laptop" />
         </service>
 
+        <!-- Persisted jobs can run before unlock too; Ensurer and PinnedPort
+             read no credential-protected app storage, so this is safe there. -->
         <service
             android:name=".EnsureJobService"
+            android:directBootAware="true"
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE" />
     </application>
