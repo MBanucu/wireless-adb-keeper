@@ -53,7 +53,7 @@ final class PassphraseStore {
         String ciphertext = prefs.getString(KEY_CIPHERTEXT, null);
         String iv = prefs.getString(KEY_IV, null);
         if (ciphertext != null && iv != null) {
-            return decrypt(ciphertext, iv);
+            return decrypt(c, ciphertext, iv);
         }
 
         String legacy = prefs.getString(LEGACY_KEY, null);
@@ -77,7 +77,7 @@ final class PassphraseStore {
             clear(c);
             return true;
         }
-        String[] sealed = seal(clean);
+        String[] sealed = seal(c, clean);
         if (sealed == null) return false;
         // One edit: the ciphertext appears and the old plaintext disappears
         // together, so a crash between writes cannot leave both behind.
@@ -106,7 +106,7 @@ final class PassphraseStore {
         String ciphertext = prefs.getString(ciphertextKey(slot), null);
         String iv = prefs.getString(ivKey(slot), null);
         if (ciphertext == null || iv == null) return "";
-        return decrypt(ciphertext, iv);
+        return decrypt(c, ciphertext, iv);
     }
 
     /** Encrypts and stores a named slot; false means the Keystore failed. */
@@ -116,7 +116,7 @@ final class PassphraseStore {
             clearSecret(c, slot);
             return true;
         }
-        String[] sealed = seal(clean);
+        String[] sealed = seal(c, clean);
         if (sealed == null) return false;
         prefs(c).edit()
                 .putString(ciphertextKey(slot), sealed[0])
@@ -140,7 +140,7 @@ final class PassphraseStore {
         return slot + IV_SUFFIX;
     }
 
-    private static String decrypt(String ciphertext, String iv) {
+    private static String decrypt(Context c, String ciphertext, String iv) {
         try {
             Cipher cipher = Cipher.getInstance(TRANSFORMATION);
             cipher.init(Cipher.DECRYPT_MODE, key(false),
@@ -149,13 +149,16 @@ final class PassphraseStore {
                     StandardCharsets.UTF_8);
         } catch (Exception e) {
             // A lost or invalidated key cannot be recovered; treat the value as
-            // unset rather than crash the service or the Network page.
+            // unset rather than crash the service or the Network page. The
+            // journal entry is what tells the user why auto-connect stopped
+            // working after a lock-screen change or a restore.
             Log.e(TAG, "wifi secret: cannot decrypt, treating as unset", e);
+            Diag.warn(c, "wifi.secret.undecryptable", String.valueOf(e));
             return null;
         }
     }
 
-    private static String[] seal(String clean) {
+    private static String[] seal(Context c, String clean) {
         try {
             Cipher cipher = Cipher.getInstance(TRANSFORMATION);
             cipher.init(Cipher.ENCRYPT_MODE, key(true));
@@ -164,6 +167,7 @@ final class PassphraseStore {
                     Base64Codec.encode(encrypted), Base64Codec.encode(cipher.getIV())};
         } catch (Exception e) {
             Log.e(TAG, "wifi secret: encryption failed, value not stored", e);
+            Diag.error(c, "wifi.secret.unsealable", String.valueOf(e));
             return null;
         }
     }

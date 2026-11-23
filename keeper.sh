@@ -11,6 +11,7 @@
 #   ./keeper.sh pin
 #   ./keeper.sh pubkey
 #   ./keeper.sh schedule
+#   ./keeper.sh diag    (status snapshot + recent events)
 #
 # The app exposes a content provider for this; `content call` starts the app
 # even when it was force-stopped, and prints the reply synchronously.
@@ -56,6 +57,7 @@ case "$command" in
     pin)      call --method pin_port ;;
     pubkey)   call --method pubkey ;;
     schedule) call --method schedule ;;
+    diag)     call --method diag ;;
     start)
         # Android refuses a background app starting its own foreground service,
         # but the shell may start it explicitly.

@@ -18,7 +18,10 @@ public class BootReceiver extends BroadcastReceiver {
         // LOCKED_BOOT_COMPLETED arrives before the first unlock. The service
         // starts its pin loop there and defers anything that needs credential-
         // protected storage (the Wi-Fi prefs) until ACTION_USER_UNLOCKED.
-        Log.i(Ensurer.TAG, "boot: " + (intent == null ? null : intent.getAction()));
+        String action = intent == null ? null : intent.getAction();
+        Log.i(Ensurer.TAG, "boot: " + action);
+        Diag.info(context, "boot.received", (action == null ? "null" : action)
+                + (unlocked(context) ? " after unlock" : " before unlock"));
 
         Intent svc = new Intent(context, MonitorService.class);
         try {
@@ -29,6 +32,7 @@ public class BootReceiver extends BroadcastReceiver {
             }
         } catch (Exception e) {
             Log.e(Ensurer.TAG, "could not start MonitorService on boot", e);
+            Diag.error(context, "boot.start_failed", String.valueOf(e));
         }
 
         JobScheduler js = (JobScheduler) context.getSystemService(Context.JOB_SCHEDULER_SERVICE);
@@ -46,5 +50,12 @@ public class BootReceiver extends BroadcastReceiver {
                 .setPersisted(true)
                 .build();
         js.schedule(now);
+        Diag.info(context, "boot.jobs", "periodic + immediate ensure scheduled");
+    }
+
+    private static boolean unlocked(Context context) {
+        android.os.UserManager um =
+                (android.os.UserManager) context.getSystemService(Context.USER_SERVICE);
+        return um == null || um.isUserUnlocked();
     }
 }

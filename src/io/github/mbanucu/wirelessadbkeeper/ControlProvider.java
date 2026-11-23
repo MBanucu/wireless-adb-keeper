@@ -109,6 +109,9 @@ public class ControlProvider extends ContentProvider {
         if ("pubkey".equals(method)) {
             return Keeper.pubkey(c);
         }
+        if ("diag".equals(method)) {
+            return Diag.report(c);
+        }
         if ("schedule".equals(method)) {
             return Keeper.schedule(c);
         }

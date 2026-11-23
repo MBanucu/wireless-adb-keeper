@@ -43,10 +43,14 @@ public class MainActivity extends Activity {
     private static final int CARD_BG = 0xFFF3F4F6;
     private static final int HAIRLINE = 0xFFD1D5DB;
 
-    private static final String[] PAGE_TITLES = {"Status", "Connect", "Network", "Help"};
+    private static final String[] PAGE_TITLES = {"Status", "Connect", "Network", "Diag", "Help"};
+    /** Index of the diagnostics page; the Help page keeps the last slot. */
+    private static final int PAGE_DIAG = 3;
     private static final String STATE_PAGE = "page";
 
     private LinearLayout statusBox;
+    private TextView diagStatus;
+    private TextView diagJournal;
     private Button serviceButton;
     private Button localButton;
     private EditText ssidField;
@@ -108,7 +112,7 @@ public class MainActivity extends Activity {
         shell.addView(content, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        pages = new View[] {pageStatus(), pageConnect(), pageNetwork(), pageHelp()};
+        pages = new View[] {pageStatus(), pageConnect(), pageNetwork(), pageDiagnostics(), pageHelp()};
         for (View p : pages) {
             p.setVisibility(View.GONE);
             content.addView(p, new FrameLayout.LayoutParams(
@@ -339,6 +343,97 @@ public class MainActivity extends Activity {
         return scrollOf(root);
     }
 
+    private View pageDiagnostics() {
+        LinearLayout root = column();
+        pageHeader(root, "Diagnostics", "What the keeper did, and what it is missing. "
+                + "The password, the pairing code and the control token are never recorded.");
+
+        root.addView(sectionLabel("Snapshot"));
+        diagStatus = monospace("");
+        root.addView(diagStatus, matchWrap());
+        TextView where = text("Also available over adb: content call --uri "
+                + "content://io.github.mbanucu.wirelessadbkeeper.control --method diag", 12, MUTED);
+        where.setTextIsSelectable(true);
+        where.setLineSpacing(dp(2), 1f);
+        where.setLayoutParams(spaced(matchWrap(), 6));
+        root.addView(where);
+
+        root.addView(sectionLabel("Recent events"));
+        diagJournal = monospace("");
+        root.addView(diagJournal, matchWrap());
+        TextView keep = text("Newest last, capped at the last 200 events or 32 KiB. "
+                + "The file lives in device-protected storage, so a boot before the first "
+                + "unlock is recorded too.", 12, MUTED);
+        keep.setLineSpacing(dp(2), 1f);
+        keep.setLayoutParams(spaced(matchWrap(), 6));
+        root.addView(keep);
+
+        root.addView(sectionLabel("Actions"));
+        action(root, "Copy diagnostics",
+                "Copies the snapshot and the events as text, ready to paste into a report.",
+                true, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                copyDiagnostics();
+            }
+        });
+        action(root, "Refresh",
+                "Reads the snapshot and the journal again.",
+                false, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                refreshDiag();
+                toast("Diagnostics refreshed");
+            }
+        });
+        return scrollOf(root);
+    }
+
+    /** A small selectable monospace block, for key=value output. */
+    private TextView monospace(String value) {
+        TextView view = text(value, 12, TEXT);
+        view.setTypeface(Typeface.MONOSPACE);
+        view.setTextIsSelectable(true);
+        view.setLineSpacing(dp(2), 1f);
+        view.setBackground(rounded(CARD_BG, dp(14), 0, 0));
+        view.setPadding(dp(14), dp(12), dp(14), dp(12));
+        return view;
+    }
+
+    private void refreshDiag() {
+        if (diagStatus == null || diagJournal == null) return;
+        try {
+            diagStatus.setText(Diag.status(this));
+        } catch (Throwable t) {
+            diagStatus.setText("snapshot unavailable: " + t);
+        }
+        try {
+            String journal = Diag.journal(this);
+            diagJournal.setText(journal.isEmpty()
+                    ? "No events yet. The monitor writes here at boot and whenever a state changes."
+                    : journal);
+        } catch (Throwable t) {
+            diagJournal.setText("journal unavailable: " + t);
+        }
+    }
+
+    private void copyDiagnostics() {
+        String all = Diag.report(this);
+        try {
+            android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                    getSystemService(CLIPBOARD_SERVICE);
+            if (cm == null) {
+                toast("No clipboard service");
+                return;
+            }
+            cm.setPrimaryClip(android.content.ClipData.newPlainText(
+                    "Wireless ADB Keeper diagnostics", all));
+            toast("Diagnostics copied");
+        } catch (Throwable t) {
+            toast("Could not copy: " + t);
+        }
+    }
+
     private View pageHelp() {
         LinearLayout root = column();
         pageHeader(root, "Help", "One-time setup, background behaviour, and options.");
@@ -491,6 +586,9 @@ public class MainActivity extends Activity {
                 navLabels[i].setTextColor(active ? ACCENT : MUTED);
                 navLabels[i].setTypeface(active ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
             }
+        }
+        if (index == PAGE_DIAG) {
+            refreshDiag();
         }
     }
 

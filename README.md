@@ -245,6 +245,7 @@ force-stopped or only just installed, which a broadcast cannot do.
 ./keeper.sh pin               # Pin adb port 5555 now
 ./keeper.sh pubkey            # the app's own ADB public key
 ./keeper.sh schedule          # 15-minute keep-alive job
+./keeper.sh diag              # status snapshot + recent events
 ```
 
 Without the wrapper, the same thing by hand:
@@ -260,6 +261,51 @@ or stop the monitor. Errors come back as `code=400, data=error=...`; `keeper.sh`
 strips the envelope. `start` is the one command that does not use the provider:
 Android 12+ refuses to let a background app start its own foreground service, so the
 shell starts it with `am start-foreground-service` instead.
+
+## Diagnostics
+
+When something does not work — a boot that never pinned the port, a missing
+grant, auto-connect that stopped after a reboot — the answer is on the phone,
+not only in `logcat`.
+
+- **Diag tab** in the app: a `key=value` snapshot (uptime, process start, unlock
+  state, mode, service, wireless flag, port 5555, Termux and permission state,
+  journal size) above the recent events, with **Copy diagnostics** and
+  **Refresh**.
+- **From adb** (and therefore from a script):
+
+  ```bash
+  adb shell content call --uri content://io.github.mbanucu.wirelessadbkeeper.control \
+      --method diag
+  ```
+
+  The first block is the snapshot, then `-- journal (oldest first) --` and one
+  line per event: `time uptime level code detail`.
+
+The journal is a ring buffer of the last 200 events, 32 KiB at most, in
+`files/diagnostics/events.log` under **device-protected** storage
+(`/data/user_de/0/<package>/`). That location is deliberate: `BootReceiver` and
+`MonitorService` run at `LOCKED_BOOT_COMPLETED`, before the first unlock, so an
+event recorded there is still readable afterwards and survives a reboot.
+
+Event codes are stable (`area.action`), so `grep` works on a copied report:
+
+| Code | Meaning |
+|---|---|
+| `boot.received`, `boot.jobs`, `boot.start_failed` | the boot receiver ran, scheduled the ensure jobs, or failed to start the service |
+| `svc.start`, `svc.unlocked`, `svc.mode`, `svc.connect` | service created (with unlock state), mode applied after unlock, mode or connect request |
+| `ensure.changed`, `ensure.noop`, `ensure.no_wifi`, `ensure.no_permission`, `ensure.failed` | what `Ensurer` did, journalled only when the result changes |
+| `pin.state` | the 5555 probe changed state (listening or the reason it is not) |
+| `wifi.suggest.added`, `wifi.suggest.failed`, `wifi.suggest.no_password`, `wifi.suggest.build_failed`, `wifi.suggest.record_unsealed` | suggestion result, with the raw status code in the detail |
+| `wifi.secret.undecryptable`, `wifi.secret.unsealable` | the Keystore could not read or write a secret, e.g. after a lock-screen change |
+
+The password, the control token and a pairing code are never written: the
+diagnostic API has no parameter for them, and the formatter scrubs
+`passphrase=…`, `token=…` and `pairing_code=…` if one is ever passed by mistake.
+The SSID does appear — it is already visible in system settings.
+
+`Diag.event()` cannot throw: a journal that is full, unwritable or corrupt costs
+that one entry and a line in `logcat`, never the service.
 
 ## Fixed port 5555
 
