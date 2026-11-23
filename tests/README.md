@@ -69,9 +69,10 @@ suite changes the list, so its class is removed with the rest of the output
 rather than left behind.
 
 `android.jar` is found in the same order as `build.sh`: `ANDROID_JAR`, then the
-newest `$HOME/android-sdk/platforms/*/android.jar`, then a jar beside
-`tests/unit.sh` or at the repository root. The SDK wins over a stale root jar
-on purpose: the app targets constants that an older jar does not have. With a
+newest platform under `ANDROID_HOME` or `ANDROID_SDK_ROOT` (what CI sets), then
+`$HOME/android-sdk/platforms/*/android.jar`, then a jar beside `tests/unit.sh`
+or at the repository root. The SDK wins over a stale root jar on purpose: the
+app targets constants that an older jar does not have. With a
 jar, all of `src/` is compiled against it. Without one, only sources that do
 not `import android.*` are compiled, which is enough for the six pure seam
 suites but not for the two ported probe suites below.
