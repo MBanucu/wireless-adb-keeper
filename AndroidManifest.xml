@@ -38,6 +38,13 @@
 
     <uses-feature android:name="android.hardware.wifi" android:required="false" />
 
+    <!-- Package visibility: Android 11+ hides installed apps unless they are
+         named here, and PinnedPort.hasTermux() is the one lookup that has to
+         work on a fresh install, before this app has interacted with Termux. -->
+    <queries>
+        <package android:name="com.termux" />
+    </queries>
+
     <application
         android:label="Wireless ADB Keeper"
         android:allowBackup="false"
