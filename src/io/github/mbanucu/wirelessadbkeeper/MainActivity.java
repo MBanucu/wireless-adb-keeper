@@ -26,10 +26,12 @@ import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.widget.Button;
+import android.widget.CompoundButton;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -51,6 +53,9 @@ public class MainActivity extends Activity {
     private LinearLayout statusBox;
     private TextView diagStatus;
     private TextView diagJournal;
+    private Switch verboseToggle;
+    private TextView verboseNote;
+    private CompoundButton.OnCheckedChangeListener verboseListener;
     private Button serviceButton;
     private Button localButton;
     private EditText ssidField;
@@ -364,6 +369,35 @@ public class MainActivity extends Activity {
         where.setLayoutParams(spaced(matchWrap(), 6));
         root.addView(where);
 
+        root.addView(sectionLabel("Verbose logging"));
+        verboseToggle = new Switch(this);
+        verboseToggle.setText("Enable verbose logging");
+        verboseToggle.setTextSize(15);
+        verboseToggle.setTextColor(TEXT);
+        verboseToggle.setChecked(VerboseLog.isEnabled(VerboseLogStore.of(this)));
+        verboseListener = new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                setVerbose(isChecked);
+            }
+        };
+        verboseToggle.setOnCheckedChangeListener(verboseListener);
+        root.addView(verboseToggle, matchWrap());
+
+        verboseNote = text("", 12, BAD);
+        verboseNote.setLineSpacing(dp(2), 1f);
+        verboseNote.setLayoutParams(spaced(matchWrap(), 6));
+        root.addView(verboseNote);
+
+        TextView verboseHelp = text("Off by default. While on, the journal also records "
+                + "every pin tick, settings change, network transition and notification "
+                + "update, so it is much noisier than usual. It turns itself off after one "
+                + "hour or " + VerboseLog.MAX_EVENTS + " events.", 12, MUTED);
+        verboseHelp.setLineSpacing(dp(2), 1f);
+        verboseHelp.setLayoutParams(spaced(matchWrap(), 6));
+        root.addView(verboseHelp);
+        updateVerboseUi();
+
         root.addView(sectionLabel("Recent events"));
         diagJournal = monospace("");
         root.addView(diagJournal, matchWrap());
@@ -407,6 +441,7 @@ public class MainActivity extends Activity {
     }
 
     private void refreshDiag() {
+        updateVerboseUi();
         if (diagStatus == null || diagJournal == null) return;
         try {
             diagStatus.setText(Diag.status(this));
@@ -438,6 +473,46 @@ public class MainActivity extends Activity {
         } catch (Throwable t) {
             toast("Could not copy: " + t);
         }
+    }
+
+    /**
+     * Applies the toggle: a fresh window when on, closed immediately when off.
+     *
+     * <p>The on/off events are written here rather than through
+     * {@link Diag#verbose}: they are one-per-toggle, not per tick, and the
+     * journal should say why the noisy lines that follow are there.
+     */
+    private void setVerbose(boolean on) {
+        VerboseLog.Store store = VerboseLogStore.of(this);
+        if (on) {
+            VerboseLog.enable(store, System.currentTimeMillis());
+            Diag.info(this, "diag.verbose.on", "verbose per-tick logging on for at most"
+                    + " one hour or " + VerboseLog.MAX_EVENTS + " events");
+            toast("Verbose logging on for one hour");
+        } else {
+            VerboseLog.disable(store);
+            Diag.info(this, "diag.verbose.off", "verbose per-tick logging off");
+            toast("Verbose logging off");
+        }
+        updateVerboseUi();
+        refreshDiag();
+    }
+
+    /** Syncs the switch and its note with the stored window; never re-fires the toggle. */
+    private void updateVerboseUi() {
+        if (verboseToggle == null || verboseNote == null) return;
+        VerboseLog.Store store = VerboseLogStore.of(this);
+        boolean on = VerboseLog.isEnabled(store);
+        if (verboseToggle.isChecked() != on) {
+            verboseToggle.setOnCheckedChangeListener(null);
+            verboseToggle.setChecked(on);
+            verboseToggle.setOnCheckedChangeListener(verboseListener);
+        }
+        verboseNote.setText(on ? "Verbose logging is on ("
+                + VerboseLog.status(store, System.currentTimeMillis())
+                + "). Every pin tick, settings change, network transition and notification"
+                + " update is being recorded. It turns off by itself." : "");
+        verboseNote.setVisibility(on ? View.VISIBLE : View.GONE);
     }
 
     private View pageHelp() {

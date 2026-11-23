@@ -73,6 +73,22 @@ public final class Diag {
         event(c, "error", code, detail);
     }
 
+    /**
+     * One verbose-only event, when the opt-in window allows it.
+     *
+     * <p>The high-frequency paths (every pin tick, observer change, network
+     * transition and notification update) call this instead of {@link #info}.
+     * With the window off nothing is written, so the journal behaves exactly as
+     * before. When the window ends, {@link VerboseLog} journals
+     * {@code diag.verbose.expired} once and silently drops the rest.
+     */
+    public static void verbose(Context c, String code, String detail) {
+        if (c == null) return;
+        VerboseLog.emit(VerboseLogStore.of(c), System.currentTimeMillis(), code, detail,
+                (level, eventCode, eventDetail) ->
+                        event(c, level, eventCode, eventDetail));
+    }
+
     /** Appends one entry. Never throws; a broken journal only costs the entry. */
     public static void event(Context c, String level, String code, String detail) {
         if (c == null || code == null) return;
@@ -154,6 +170,8 @@ public final class Diag {
         fields.add(new DiagSnapshot.Field("mode", () -> LocalWifi.mode(c)));
         fields.add(new DiagSnapshot.Field("service",
                 () -> MonitorService.running ? "running" : "stopped"));
+        fields.add(new DiagSnapshot.Field("verbose", () -> VerboseLog.status(
+                VerboseLogStore.of(c), System.currentTimeMillis())));
         fields.add(new DiagSnapshot.Field("adb_wifi_enabled",
                 () -> String.valueOf(Ensurer.isWirelessDebuggingOn(c))));
         fields.add(new DiagSnapshot.Field("dev_settings", () -> {
