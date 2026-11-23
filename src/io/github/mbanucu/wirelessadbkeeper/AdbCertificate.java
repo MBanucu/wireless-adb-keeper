@@ -67,18 +67,32 @@ public final class AdbCertificate {
 
     /** The certificate for the app's key, generated beside it on first use. */
     public static X509Certificate loadOrCreate(Context c) throws IOException {
+        // Deleting the key file is the documented reset, and AdbIdentity then
+        // generates a new one immediately. A cached certificate would still name
+        // the old key, and a TLS handshake with a certificate that does not match
+        // its key fails in a way that reads like a wrong pairing code.
+        PrivateKey key = AdbIdentity.load(c).privateKey();
         X509Certificate cert = cached;
-        if (cert != null) {
+        if (cert != null && certifies(cert, key)) {
             return cert;
         }
         synchronized (AdbCertificate.class) {
             cert = cached;
-            if (cert == null) {
-                cert = loadOrCreate(AdbIdentity.dir(c), AdbIdentity.load(c).privateKey());
+            if (cert == null || !certifies(cert, key)) {
+                cert = loadOrCreate(AdbIdentity.dir(c), key);
                 cached = cert;
             }
         }
         return cert;
+    }
+
+    /** Whether {@code cert} carries the public half of {@code key}. */
+    private static boolean certifies(X509Certificate cert, PrivateKey key) {
+        try {
+            return cert.getPublicKey().equals(publicKeyOf(key));
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     /** As {@link #loadOrCreate(Context)}, for the host-side probe. */
