@@ -3,6 +3,7 @@ package io.github.mbanucu.wirelessadbkeeper;
 import android.content.Context;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiNetworkSuggestion;
+import android.os.Build;
 import android.util.Log;
 
 import java.util.Collections;
@@ -56,11 +57,7 @@ public final class WifiSuggestion {
 
         WifiNetworkSuggestion suggestion;
         try {
-            suggestion = new WifiNetworkSuggestion.Builder()
-                    .setSsid(ssid)
-                    .setWpa2Passphrase(pass)
-                    .setIsMetered(true)
-                    .build();
+            suggestion = suggest(ssid, pass);
         } catch (Exception e) {
             Log.e(Ensurer.TAG, "wifi suggestion: build failed", e);
             return -3;
@@ -84,7 +81,7 @@ public final class WifiSuggestion {
         if (wm == null) return;
         prefs(c).edit().remove(KEY_APPLIED).apply();
         try {
-            List<WifiNetworkSuggestion> existing = wm.getNetworkSuggestions();
+            List<WifiNetworkSuggestion> existing = registered(c, wm);
             if (existing != null && !existing.isEmpty()) {
                 wm.removeNetworkSuggestions(existing);
                 Log.i(Ensurer.TAG, "wifi suggestions removed: " + existing.size());
@@ -98,11 +95,39 @@ public final class WifiSuggestion {
         WifiManager wm = manager(c);
         if (wm == null) return -1;
         try {
-            List<WifiNetworkSuggestion> existing = wm.getNetworkSuggestions();
+            List<WifiNetworkSuggestion> existing = registered(c, wm);
             return existing == null ? 0 : existing.size();
         } catch (Exception e) {
             return -1;
         }
+    }
+
+    /**
+     * The suggestions this app has registered.
+     *
+     * `getNetworkSuggestions` only exists from Android 11, and on Android 10 it
+     * is a `NoSuchMethodError`, not an exception the callers below would catch.
+     * That version can only remove a suggestion by handing back an identical
+     * object, so the one this app would have added is rebuilt from the stored
+     * credentials instead.
+     */
+    private static List<WifiNetworkSuggestion> registered(Context c, WifiManager wm) {
+        if (Build.VERSION.SDK_INT >= 30) {
+            return wm.getNetworkSuggestions();
+        }
+        String pass = LocalWifi.passphrase(c);
+        if (pass == null || pass.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return Collections.singletonList(suggest(LocalWifi.ssid(c), pass));
+    }
+
+    private static WifiNetworkSuggestion suggest(String ssid, String pass) {
+        return new WifiNetworkSuggestion.Builder()
+                .setSsid(ssid)
+                .setWpa2Passphrase(pass)
+                .setIsMetered(true)
+                .build();
     }
 
     private static WifiManager manager(Context c) {

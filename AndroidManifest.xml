@@ -1,12 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     package="io.github.mbanucu.wirelessadbkeeper"
     android:versionCode="9"
     android:versionName="1.8">
 
-    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="35" />
+    <!-- Android 10 is the real floor: the reconnect features are built on
+         WifiNetworkSuggestion and WifiNetworkSpecifier, which arrived in API 29.
+         Lowering this only produced UnsupportedOperation paths and lint errors. -->
+    <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35" />
 
-    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+    <!-- Granted by `pm grant` from adb, which is the whole setup story; lint
+         only knows that it is not for ordinary apps. -->
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
     <!-- Probing 127.0.0.1:5555 needs a socket; without INTERNET even loopback
          connects fail, which made the pin watchdog report the port as closed. -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -14,6 +22,9 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <!-- Android 12+ wants both location permissions declared before an app may
+         read or change Wi-Fi networks; FINE is the one actually requested. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
