@@ -74,9 +74,14 @@
             </intent-filter>
         </receiver>
 
+        <!-- Exported for `am broadcast` from adb, but only to holders of
+             WRITE_SECURE_SETTINGS (shell, root, system and the app itself), so
+             reconnect.sh's hint still works from an adb shell while an
+             ordinary app's ENSURE is refused. -->
         <receiver
             android:name=".EnsureReceiver"
-            android:exported="true">
+            android:exported="true"
+            android:permission="android.permission.WRITE_SECURE_SETTINGS">
             <intent-filter>
                 <action android:name="io.github.mbanucu.wirelessadbkeeper.ENSURE" />
             </intent-filter>
