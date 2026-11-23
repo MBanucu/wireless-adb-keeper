@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Gradle build, lint and device-free probe
+  tests:
+    name: Unit suites, lint and debug build
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -24,6 +24,30 @@ jobs:
           distribution: temurin
           java-version: "17"
           cache: gradle
+
+      # Accelerator only: tests/unit.sh still compares the file list and mtimes,
+      # so a restored stamp that no longer matches simply recompiles. The logs
+      # and the timing history are deliberately not part of this cache.
+      - name: Restore the unit compile stamp
+        uses: actions/cache@v4
+        with:
+          path: |
+            tests/out/unit
+            tests/out/unit.sources
+          key: unit-compile-${{ runner.os }}-${{ hashFiles('src/**/*.java', 'tests/unit/**/*.java') }}
+          restore-keys: unit-compile-${{ runner.os }}-
+
+      # One total-ms line per green run, used by tests/gate.sh for the recent
+      # median. A miss (first run, evicted cache) skips the comparison instead
+      # of failing it.
+      - name: Restore the unit timing history
+        uses: actions/cache@v4
+        with:
+          path: tests/out/timings.tsv
+          key: unit-timings-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            unit-timings-${{ github.ref_name }}-
+            unit-timings-
 
       # The ubuntu image ships the Android SDK and cmdline-tools, so there is no
       # setup action: android-actions/setup-android still asks sdkmanager for a
@@ -43,10 +67,34 @@ jobs:
           yes | "$SDKMANAGER" --licenses > /dev/null
           "$SDKMANAGER" --install "platforms;android-35" "build-tools;36.0.0"
 
-      # There is no JUnit dependency (it does not resolve offline), so `test` is
-      # wired in build.gradle.kts to the device-free tests/unit suites and probes.
-      - name: Test, lint and assemble
-        run: ./gradlew test lint assembleDebug --stacktrace
+      - name: Unit suites on a plain JDK, then lint and build
+        run: |
+          set -euo pipefail
+          mkdir -p tests/out
+          # The phone path: bash, javac and java only, no Gradle and no build.sh.
+          # This runs before any Gradle work in the job.
+          status=0
+          bash tests/unit.sh 2>&1 | tee tests/out/unit.log || status=$?
+          # Prints the check/suite/timing counts, refuses an empty run, and fails
+          # only when this run is more than 4x the recent cached median.
+          bash tests/gate.sh --log tests/out/unit.log --status "$status"
+          ./gradlew probe lintDebug assembleDebug --stacktrace 2>&1 | tee tests/out/gradle.log
+
+      # A red run should explain itself without a rerun: the check names and
+      # expected/actual values are in unit.log (and failing-checks.txt), lint's
+      # report is the HTML AGP writes, and gradle.log has the compiler output.
+      - name: Upload the failure context
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-failure
+          path: |
+            tests/out/unit.log
+            tests/out/gate-summary.txt
+            tests/out/failing-checks.txt
+            tests/out/gradle.log
+            build-gradle/reports/lint-results-debug.html
+          if-no-files-found: warn
 
       - name: Upload the debug APK
         uses: actions/upload-artifact@v4

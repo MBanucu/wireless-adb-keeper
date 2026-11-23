@@ -10,6 +10,7 @@ of Java instead.
 ```
 tests/
   unit.sh                              # discovery, cached javac, one JVM
+  gate.sh                              # counts, empty-run guard, timing gate
   unit/harness/SuiteRunner.java        # runs every named suite in one JVM
   unit/harness/TestSupport.java        # ok/FAIL lines, counts, exit code
   unit/java/.../*Test.java             # the suites
@@ -26,12 +27,67 @@ bash tests/unit.sh                 # no Gradle, no SDK needed for pure suites
 ./gradlew probeUnit                # the same script through Gradle
 ./gradlew probe                    # probeUnit plus the tools/ probes
 ./gradlew check                    # probeUnit, probes and lint
+
+# What CI does: run the suites, then let the gate read the log.
+mkdir -p tests/out
+bash tests/unit.sh > tests/out/unit.log 2>&1; status=$?
+bash tests/gate.sh --log tests/out/unit.log --status "$status"
 ```
 
 Output is one `ok`/`FAIL` line per check, then `PASS n <suite>` or
 `FAIL n of m <suite>` for each suite. The exit code is 1 when any check failed.
 `SuiteRunner` also prints `timing: <class>#main <ms> passed` per suite, the
 `test-timings` format used by android-accessible-terminal.
+
+## The CI gate
+
+CI has one `tests` job that runs, in this order:
+
+1. `bash tests/unit.sh` on the plain JDK, before any Gradle step. This is the
+   phone path: no `./gradlew`, no `build.sh`, no test framework.
+2. `bash tests/gate.sh`, which reads that log.
+3. `./gradlew probe lintDebug assembleDebug` (locally add `--offline`; CI
+   resolves the wrapper and dependencies over the network it already uses).
+
+`tests/gate.sh` prints the counts every time, not only a verdict:
+
+```
+gate: checks: 196 (0 failed)
+gate: suites: 11
+gate: timing lines: 11 (1155ms total)
+gate: timing: median 1140ms of last 5; limit 4560ms (4x), floor 1000ms
+gate: PASS 196 checks in 11 suites
+```
+
+It exits 1 when `unit.sh` failed, when no checks, suites or `timing:` lines were
+found (a zero-test run is red), when the number of `timing:` lines does not
+match the number of suites, or when the timed total is more than 4x the median
+of the last ten green runs. The median is `tests/out/timings.tsv`, one total-ms
+line per run; CI restores it with `actions/cache` and appends only green runs.
+Fewer than three samples, or a missing/corrupt history file, skips the
+regression comparison instead of failing it. The log and summary are uploaded as
+artifacts on failure; only the timing history and the javac stamp are cached,
+never the suite output.
+
+A red run should not need a rerun to explain itself. The failure artifact holds
+`unit.log` (the `FAIL <check>: expected <x> got <y>` lines), `failing-checks.txt`
+(just those lines), `gate-summary.txt`, `gradle.log`, and lint's
+`lint-results-debug.html`. Compilation and lint failures still fail the Gradle
+step; `lintDebug` uses `abortOnError = true`.
+
+### What green proves
+
+Green means every discovered JVM check passed, lint reported nothing fatal, and
+the debug APK assembled. It does **not** mean the app works on a phone: no unit
+suite can reach the real adbd, a `Context`, notifications, the activity or the
+network. Those are the manual device checks below.
+
+The device suite is never in CI, by design. CI is a container with no phone, no
+adbd on `127.0.0.1:5555` and no Termux `RUN_COMMAND` delivery, so a device job
+would only test a mock and call it green. Device behaviour is verified by hand:
+`./gradlew probeAdb` against a running adbd (plus `-PadbTcpip=true` for the
+re-pin path), and a device suite such as `tests/device.sh` is run manually on the
+phone. Neither is part of `probe`, and neither belongs in this workflow.
 
 ## Writing a suite
 
