@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/data/data/com.termux/files/usr/bin/bash
 # Drive the keeper from a shell instead of tapping through the app.
 #
 #   ./keeper.sh status

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/data/data/com.termux/files/usr/bin/bash
 # Wait for adbd to appear and connect. Used after Wi-Fi was disconnected.
 #
 # The pinned port is tried first, so a phone the app has pinned to 5555

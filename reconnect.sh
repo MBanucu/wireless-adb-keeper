@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/data/data/com.termux/files/usr/bin/bash
 # Reconnect ADB to this phone's wireless debugging port.
 #
 # adbd picks a new random port every time wireless debugging is restarted,
