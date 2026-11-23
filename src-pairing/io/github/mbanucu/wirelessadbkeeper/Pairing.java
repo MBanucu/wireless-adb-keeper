@@ -3,15 +3,23 @@ package io.github.mbanucu.wirelessadbkeeper;
 import android.content.Context;
 
 import java.io.ByteArrayOutputStream;
+import java.io.Closeable;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.nio.charset.Charset;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 
+import io.github.muntashirakon.adb.AdbAuthenticationFailedException;
 import io.github.muntashirakon.adb.AdbConnection;
 import io.github.muntashirakon.adb.AdbStream;
 import io.github.muntashirakon.adb.PairingConnectionCtx;
@@ -36,6 +44,8 @@ public final class Pairing {
     private static final Charset ASCII = Charset.forName("US-ASCII");
     private static final int DISCOVERY_MS = 15_000;
     private static final int CONNECT_MS = 10_000;
+    private static final int VERIFY_MS = 20_000;
+    private static final int PAIR_MS = 30_000;
 
     private Pairing() {}
 
@@ -45,24 +55,32 @@ public final class Pairing {
         if (!code.matches("\\d{6}")) {
             return "Enter the 6-digit code shown in Developer options";
         }
+        final AtomicReference<Closeable> live = new AtomicReference<>();
         try {
             Endpoint endpoint = discover(context, AdbMdns.SERVICE_TYPE_TLS_PAIRING,
                     "Wireless debugging is not showing a pairing code. Open Developer options, "
                             + "tap \"Pair device with pairing code\", then try again.");
-            PrivateKey privateKey = AdbIdentity.load(context).privateKey();
-            X509Certificate certificate = AdbCertificate.loadOrCreate(context);
+            final PrivateKey privateKey = AdbIdentity.load(context).privateKey();
+            final X509Certificate certificate = AdbCertificate.loadOrCreate(context);
 
-            PairingConnectionCtx pairing = new PairingConnectionCtx(
-                    endpoint.address.getHostAddress(), endpoint.port,
-                    code.getBytes(ASCII), privateKey, certificate, "pairing");
-            try {
-                pairing.start();
-            } finally {
-                pairing.close();
-            }
+            within(PAIR_MS, live, new Attempt<Void>() {
+                @Override
+                public Void run() throws Exception {
+                    PairingConnectionCtx pairing = new PairingConnectionCtx(
+                            endpoint.address.getHostAddress(), endpoint.port,
+                            code.getBytes(ASCII), privateKey, certificate, "pairing");
+                    live.set(pairing);
+                    try {
+                        pairing.start();
+                    } finally {
+                        closeQuietly(pairing);
+                    }
+                    return null;
+                }
+            });
             return "Paired. The app's key is now trusted by this phone.";
-        } catch (IOException e) {
-            return "Pairing failed: " + message(e);
+        } catch (TimeoutException e) {
+            return "Pairing timed out: " + noAnswer(PAIR_MS) + ".";
         } catch (Exception e) {
             return "Pairing failed: " + message(e);
         }
@@ -74,34 +92,100 @@ public final class Pairing {
      * the key that was presented.
      */
     public static String verify(Context context) {
+        final AtomicReference<Closeable> live = new AtomicReference<>();
         try {
             Endpoint endpoint = discover(context, AdbMdns.SERVICE_TYPE_TLS_CONNECT,
                     "Wireless debugging is off. Turn it on in Developer options, then try again.");
-            PrivateKey privateKey = AdbIdentity.load(context).privateKey();
-            X509Certificate certificate = AdbCertificate.loadOrCreate(context);
+            final PrivateKey privateKey = AdbIdentity.load(context).privateKey();
+            final X509Certificate certificate = AdbCertificate.loadOrCreate(context);
 
-            AdbConnection connection = AdbConnection.create(
-                    endpoint.address.getHostAddress(), endpoint.port,
-                    privateKey, certificate);
-            try {
-                connection.connect();
-                AdbStream stream = connection.open("shell:id");
-                byte[] buffer = new byte[256];
-                ByteArrayOutputStream out = new ByteArrayOutputStream();
-                int n;
-                while ((n = stream.read(buffer, 0, buffer.length)) > 0) {
-                    out.write(buffer, 0, n);
+            return within(VERIFY_MS, live, new Attempt<String>() {
+                @Override
+                public String run() throws Exception {
+                    AdbConnection connection = AdbConnection.create(
+                            endpoint.address.getHostAddress(), endpoint.port,
+                            privateKey, certificate);
+                    live.set(connection);
+                    try {
+                        // Abort on an untrusted key instead of waiting for the
+                        // on-device prompt, which this screen cannot show.
+                        if (!connection.connect(CONNECT_MS, TimeUnit.MILLISECONDS, true)) {
+                            throw new IOException(noAnswer(CONNECT_MS));
+                        }
+                        AdbStream stream = connection.open("shell:id");
+                        live.set(stream);
+                        byte[] buffer = new byte[256];
+                        ByteArrayOutputStream out = new ByteArrayOutputStream();
+                        int n;
+                        while ((n = stream.read(buffer, 0, buffer.length)) > 0) {
+                            out.write(buffer, 0, n);
+                        }
+                        String reply = new String(out.toByteArray(), Charset.forName("UTF-8")).trim();
+                        return reply.isEmpty()
+                                ? "Connected, but the shell said nothing back."
+                                : "Connected as " + reply;
+                    } finally {
+                        connection.close();
+                    }
                 }
-                String reply = new String(out.toByteArray(), Charset.forName("UTF-8")).trim();
-                return reply.isEmpty()
-                        ? "Connected, but the shell said nothing back."
-                        : "Connected as " + reply;
-            } finally {
-                connection.close();
-            }
+            });
+        } catch (TimeoutException e) {
+            return "No connection yet: " + noAnswer(VERIFY_MS) + ".";
+        } catch (AdbAuthenticationFailedException e) {
+            return "No connection yet: the phone does not trust this app's key - pair again.";
         } catch (Exception e) {
             return "No connection yet: " + message(e);
         }
+    }
+
+    /**
+     * Runs an attempt on its own thread so a blocked socket connect, handshake
+     * or read cannot hold the caller forever. On timeout the attempt's live
+     * connection is closed first, which is what wakes the library's unbounded
+     * read; cancelling alone would only cover the interruptible waits.
+     */
+    private static <T> T within(long timeoutMs, AtomicReference<Closeable> live, Attempt<T> attempt)
+            throws Exception {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        Future<T> future = executor.submit(new Callable<T>() {
+            @Override
+            public T call() throws Exception {
+                return attempt.run();
+            }
+        });
+        try {
+            return future.get(timeoutMs, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            closeQuietly(live.get());
+            future.cancel(true);
+            throw e;
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof Exception) throw (Exception) cause;
+            if (cause instanceof Error) throw (Error) cause;
+            throw e;
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private interface Attempt<T> {
+        T run() throws Exception;
+    }
+
+    private static void closeQuietly(Closeable closeable) {
+        if (closeable == null) return;
+        try {
+            closeable.close();
+        } catch (Throwable ignored) {
+            // The library can still be mid-handshake with no streams to close
+            // yet; the cancelled future remains the bound in that case.
+        }
+    }
+
+    private static String noAnswer(long timeoutMs) {
+        return "the phone did not answer within "
+                + TimeUnit.MILLISECONDS.toSeconds(timeoutMs) + " s";
     }
 
     /** One advertised adbd endpoint. */
