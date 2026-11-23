@@ -1,9 +1,14 @@
 # build output and signing material
 build/
+build-gradle/
 *.apk
 *.idsig
 debug.keystore
 android.jar
+
+# Gradle
+.gradle/
+local.properties
 
 # runtime state
 *.log

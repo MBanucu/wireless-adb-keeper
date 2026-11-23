@@ -118,6 +118,54 @@ Updating an installed copy needs the **same signing key**: pass `--ks` to
 `apksigner` with the key the installed build was signed with, or Android refuses the
 update as a signature mismatch (an uninstall also clears the app's saved settings).
 
+### Gradle
+
+`build.sh` remains the on-phone build. The Gradle build exists for what it is
+better at: declaring a dependency instead of hand-dexing it, and importing the
+tree into an IDE.
+
+```bash
+./gradlew assembleDebug     # build-gradle/outputs/apk/debug/
+```
+
+It builds the same `src/` and the same root `AndroidManifest.xml`, which stays
+canonical for `build.sh`, plus the dependency-using `src-pairing/` (see
+[Pairing](#pairing)). The package name, `versionCode`, `versionName`,
+`minSdk` and `targetSdk` are read from that manifest, so the two builds cannot
+disagree; Gradle stages a copy under `build-gradle/` with the attributes AGP owns
+removed. Output goes to `build-gradle/` because `build.sh` owns `build/`.
+
+`local.properties` (gitignored) points at the SDK; on this device AGP also needs
+`android.aapt2FromMavenOverride` in `~/.gradle/gradle.properties`, since the
+`aapt2` AGP ships is x86_64. The Gradle debug APK is signed with the SDK's
+`~/.android/debug.keystore`, not the `debug.keystore` `build.sh` creates, so it
+will not update an installed `build.sh` build.
+
+### Pairing
+
+Wireless-debugging pairing is the only thing in the app that needs a library.
+It is SPAKE2 plus a certificate exchange, so it uses `libadb-android` and lives
+in `src-pairing/`, a source directory only Gradle compiles. `build.sh` still
+sees `src/` alone: its APK has no dependency, no native library, and no pairing
+screen, and the extra `<activity>` for the pairing screen is injected into the
+staged manifest by `build.gradle.kts` rather than into the canonical one.
+
+The one-time setup, for the Gradle build only:
+
+1. Open the app → **Help** → **Pair this phone**.
+2. In Developer options, open **Wireless debugging** → **Pair device with
+   pairing code** and leave that dialog up — the port it advertises exists only
+   while it is open.
+3. Type the 6-digit code into the app and tap **Pair**.
+
+`AdbCertificate` gives the existing key a self-signed certificate beside it in
+device-protected storage (built as DER by hand, so `src/` needs no BouncyCastle;
+`keytool -printcert` reads it back as v3, SHA256withRSA, 2048-bit,
+`digitalSignature`, not a CA). The pairing port comes from mDNS
+(`_adb-tls-pairing._tcp`). **Test connection** then opens `shell:id` over the
+trusted TLS port — that, not the key file, is the proof: adbd only answers a key
+it has stored, and `/data/misc/adb/adb_keys` is unreadable to this app anyway.
+
 ## Install
 
 ```bash
