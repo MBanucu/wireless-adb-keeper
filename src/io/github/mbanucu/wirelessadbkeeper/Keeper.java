@@ -88,8 +88,11 @@ public final class Keeper {
             return "error=mode must be auto or local";
         }
         LocalWifi.setMode(c, auto ? LocalWifi.MODE_AUTO : LocalWifi.MODE_LOCAL);
-        sendServiceAction(c, MonitorService.ACTION_RELOAD_LOCAL);
-        return "mode=" + (auto ? "auto-connect" : "local-only");
+        // Do not start the service: Android 12+ refuses that from the provider,
+        // and a running monitor reloads from the revision key by itself.
+        LocalWifi.bumpRevision(c);
+        return "mode=" + (auto ? "auto-connect" : "local-only")
+                + ", reload=" + reloadTarget();
     }
 
     /** Stores the credentials; the password is never echoed back. */
@@ -101,10 +104,16 @@ public final class Keeper {
         if (passphrase != null && !LocalWifi.setPassphrase(c, passphrase)) {
             return "error=could not encrypt the passphrase";
         }
-        sendServiceAction(c, MonitorService.ACTION_RELOAD_LOCAL);
+        LocalWifi.bumpRevision(c);
         String saved = LocalWifi.passphrase(c);
         return "ssid=" + LocalWifi.ssid(c)
-                + ", passphrase=" + (saved == null || saved.isEmpty() ? "none" : "set");
+                + ", passphrase=" + (saved == null || saved.isEmpty() ? "none" : "set")
+                + ", reload=" + reloadTarget();
+    }
+
+    /** Where a saved change takes effect: the live monitor, or its next start. */
+    private static String reloadTarget() {
+        return MonitorService.running ? "monitor" : "next start";
     }
 
     /** Sends `adb tcpip 5555` through Termux right now. */
