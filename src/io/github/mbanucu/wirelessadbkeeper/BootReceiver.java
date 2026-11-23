@@ -15,6 +15,11 @@ public class BootReceiver extends BroadcastReceiver {
 
     @Override
     public void onReceive(Context context, Intent intent) {
+        // LOCKED_BOOT_COMPLETED arrives before the first unlock. The service
+        // starts its pin loop there and defers anything that needs credential-
+        // protected storage (the Wi-Fi prefs) until ACTION_USER_UNLOCKED.
+        Log.i(Ensurer.TAG, "boot: " + (intent == null ? null : intent.getAction()));
+
         Intent svc = new Intent(context, MonitorService.class);
         try {
             if (Build.VERSION.SDK_INT >= 26) {
