@@ -1,6 +1,7 @@
 package io.github.mbanucu.wirelessadbkeeper;
 
 import android.content.Context;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Process;
@@ -9,20 +10,9 @@ import android.os.UserManager;
 import android.provider.Settings;
 import android.util.Log;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
-import java.nio.charset.StandardCharsets;
-import java.text.SimpleDateFormat;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.List;
-import java.util.Locale;
-import java.util.TimeZone;
 
 /**
  * The app's own record of what happened, readable on the phone.
@@ -41,9 +31,15 @@ import java.util.TimeZone;
  * test can assert on it instead of on prose.
  *
  * <p>Two rules are enforced here rather than trusted: the journal is capped
- * (events and bytes) and it never throws. A diagnostics path that fills the
- * disk or takes the service down is worse than no diagnostics, so every failure
- * in this class is reduced to one log line.
+ * (the default is 200 events and 32 KiB; the page can choose "last day" or
+ * off) and it never throws. A diagnostics path that fills the disk or takes the
+ * service down is worse than no diagnostics, so every failure in this class is
+ * reduced to one log line. Off returns before the file is opened, so it stops
+ * growth instead of emptying the journal.
+ *
+ * <p>An update keeps the last journal as {@code events.previous.log} with its
+ * version and boot id, so the page never mixes the previous build's lines with
+ * this boot's.
  *
  * <p>The passphrase, the control token and a pairing code must never be passed
  * in. {@link #scrub} is a second line of defence for the one shape that is easy
@@ -51,13 +47,9 @@ import java.util.TimeZone;
  */
 public final class Diag {
     static final String DIR = "diagnostics";
-    static final String FILE = "events.log";
-    /** Hard caps: whichever is reached first wins. */
-    static final int MAX_EVENTS = 200;
-    static final long MAX_BYTES = 32 * 1024;
+    static final String FILE = DiagRotation.CURRENT_FILE;
 
     private static final Object LOCK = new Object();
-    private static final String TIME = "yyyy-MM-dd'T'HH:mm:ss'Z'";
 
     private Diag() {}
 
@@ -92,21 +84,31 @@ public final class Diag {
     /** Appends one entry. Never throws; a broken journal only costs the entry. */
     public static void event(Context c, String level, String code, String detail) {
         if (c == null || code == null) return;
-        String line = format(level, code, detail);
         try {
-            if ("warn".equals(level)) {
-                Log.w(Ensurer.TAG, "diag: " + line);
-            } else if ("error".equals(level)) {
-                Log.e(Ensurer.TAG, "diag: " + line);
-            } else {
-                Log.i(Ensurer.TAG, "diag: " + line);
-            }
+            DiagRetention.Mode mode = DiagRetentionStore.mode(c);
+            if (!DiagRetention.writes(mode)) return;
             synchronized (LOCK) {
                 File file = file(c);
-                ArrayDeque<String> lines = read(file);
-                lines.addLast(line);
-                trim(lines);
-                write(file, lines);
+                String version = null;
+                try {
+                    version = version(c);
+                } catch (Throwable ignored) {
+                    // A journal entry is still more useful than none; only the
+                    // rotation needs the version.
+                }
+                if (version != null) {
+                    DiagRotation.maybeRotate(file.getParentFile(), version, bootId(c));
+                }
+                String line = DiagJournal.append(file, System.currentTimeMillis(),
+                        SystemClock.elapsedRealtime() / 1000, level, code, detail, mode);
+                if (line == null) return;
+                if ("warn".equals(level)) {
+                    Log.w(Ensurer.TAG, "diag: " + line);
+                } else if ("error".equals(level)) {
+                    Log.e(Ensurer.TAG, "diag: " + line);
+                } else {
+                    Log.i(Ensurer.TAG, "diag: " + line);
+                }
             }
         } catch (Throwable t) {
             Log.w(Ensurer.TAG, "diag: cannot record " + code + ": " + t);
@@ -117,16 +119,38 @@ public final class Diag {
     public static String journal(Context c) {
         if (c == null) return "";
         try {
+            rotateIfNeeded(c);
             synchronized (LOCK) {
-                StringBuilder out = new StringBuilder();
-                for (String line : read(file(c))) {
-                    if (out.length() > 0) out.append('\n');
-                    out.append(line);
-                }
-                return out.toString();
+                return DiagJournal.journal(file(c));
             }
         } catch (Throwable t) {
             return "journal unavailable: " + t;
+        }
+    }
+
+    /** The one journal kept from before the last app update; empty when none. */
+    public static String previousJournal(Context c) {
+        if (c == null) return "";
+        try {
+            rotateIfNeeded(c);
+            synchronized (LOCK) {
+                return DiagRotation.previousJournal(file(c).getParentFile());
+            }
+        } catch (Throwable t) {
+            return "previous journal unavailable: " + t;
+        }
+    }
+
+    /** The label for the previous build's lines, or "" when there is none. */
+    public static String previousMarker(Context c) {
+        if (c == null) return "";
+        try {
+            rotateIfNeeded(c);
+            synchronized (LOCK) {
+                return DiagRotation.previousMarker(file(c).getParentFile());
+            }
+        } catch (Throwable t) {
+            return "";
         }
     }
 
@@ -134,8 +158,9 @@ public final class Diag {
     public static int count(Context c) {
         if (c == null) return 0;
         try {
+            rotateIfNeeded(c);
             synchronized (LOCK) {
-                return read(file(c)).size();
+                return DiagJournal.count(file(c));
             }
         } catch (Throwable t) {
             return 0;
@@ -152,16 +177,12 @@ public final class Diag {
      */
     public static String status(Context c) {
         if (c == null) return "";
+        rotateIfNeeded(c);
         List<DiagSnapshot.Field> fields = new ArrayList<>();
-        fields.add(new DiagSnapshot.Field("app_version", () -> {
-            try {
-                return c.getPackageManager().getPackageInfo(c.getPackageName(), 0).versionName;
-            } catch (Exception e) {
-                throw new IllegalStateException(e);
-            }
-        }));
+        fields.add(new DiagSnapshot.Field("app_version", () -> version(c)));
         fields.add(new DiagSnapshot.Field("android",
                 () -> Build.VERSION.RELEASE + " (sdk " + Build.VERSION.SDK_INT + ")"));
+        fields.add(new DiagSnapshot.Field("boot_id", () -> bootId(c)));
         fields.add(new DiagSnapshot.Field("uptime_s",
                 () -> String.valueOf(SystemClock.elapsedRealtime() / 1000)));
         fields.add(new DiagSnapshot.Field("process_started_after_boot_s",
@@ -204,12 +225,25 @@ public final class Diag {
                 () -> count(c) + " entries"));
         fields.add(new DiagSnapshot.Field("journal_bytes",
                 () -> String.valueOf(file(c).length())));
+        fields.add(new DiagSnapshot.Field("journal_retention",
+                () -> DiagRetentionStore.mode(c).label()));
+        fields.add(new DiagSnapshot.Field("journal_previous", () -> {
+            String marker = previousMarker(c);
+            return marker.isEmpty() ? "none" : marker;
+        }));
         return DiagSnapshot.render(fields);
     }
 
-    /** Status followed by the journal, for `content call --method diag`. */
+    /** Status followed by the journal and any kept previous-build block. */
     public static String report(Context c) {
-        return status(c) + "\n-- journal (oldest first) --\n" + journal(c) + "\n";
+        StringBuilder out = new StringBuilder();
+        out.append(status(c)).append('\n');
+        out.append("-- journal (oldest first) --\n").append(journal(c));
+        String marker = previousMarker(c);
+        if (!marker.isEmpty()) {
+            out.append("\n-- ").append(marker).append(" --\n").append(previousJournal(c));
+        }
+        return out.append('\n').toString();
     }
 
     // ---------------------------------------------------------------- internals
@@ -224,11 +258,25 @@ public final class Diag {
         return um == null || um.isUserUnlocked();
     }
 
-    private static String format(String level, String code, String detail) {
-        long uptime = SystemClock.elapsedRealtime() / 1000;
-        SimpleDateFormat f = new SimpleDateFormat(TIME, Locale.US);
-        f.setTimeZone(TimeZone.getTimeZone("GMT"));
-        return DiagFormat.line(f.format(new Date()), uptime, level, code, detail);
+    private static String version(Context c) {
+        try {
+            PackageInfo info = c.getPackageManager().getPackageInfo(c.getPackageName(), 0);
+            long code = Build.VERSION.SDK_INT >= 28 ? info.getLongVersionCode() : info.versionCode;
+            String name = info.versionName == null ? "unknown" : info.versionName;
+            return name + " (" + code + ")";
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** The boot counter, so a kept line can be tied to the boot it came from. */
+    static String bootId(Context c) {
+        try {
+            return String.valueOf(Settings.Global.getInt(c.getContentResolver(),
+                    Settings.Global.BOOT_COUNT));
+        } catch (Throwable t) {
+            return DiagRotation.UNKNOWN;
+        }
     }
 
     /** The journal file, in device-protected storage so boot events survive. */
@@ -242,35 +290,17 @@ public final class Diag {
         return new File(dir, FILE);
     }
 
-    private static ArrayDeque<String> read(File file) {
-        ArrayDeque<String> lines = new ArrayDeque<>();
-        if (!file.isFile()) return lines;
-        try (BufferedReader in = new BufferedReader(new InputStreamReader(
-                new FileInputStream(file), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = in.readLine()) != null) {
-                if (!line.isEmpty()) lines.addLast(line);
+    /** Rotates before a read as well, so the page shows an update without an event. */
+    private static void rotateIfNeeded(Context c) {
+        try {
+            File file = file(c);
+            String version = version(c);
+            String boot = bootId(c);
+            synchronized (LOCK) {
+                DiagRotation.maybeRotate(file.getParentFile(), version, boot);
             }
-        } catch (Exception e) {
-            Log.w(Ensurer.TAG, "diag: cannot read journal: " + e);
+        } catch (Throwable t) {
+            Log.w(Ensurer.TAG, "diag: cannot rotate journal: " + t);
         }
-        return lines;
-    }
-
-    private static void write(File file, ArrayDeque<String> lines) throws Exception {
-        try (OutputStreamWriter out = new OutputStreamWriter(
-                new FileOutputStream(file), StandardCharsets.UTF_8)) {
-            for (String line : lines) {
-                out.write(line);
-                out.write('\n');
-            }
-        }
-    }
-
-    /** Enforces both caps from the front: the newest entries are the useful ones. */
-    private static void trim(ArrayDeque<String> lines) {
-        List<String> kept = DiagFormat.trim(new ArrayList<>(lines), MAX_EVENTS, MAX_BYTES);
-        lines.clear();
-        lines.addAll(kept);
     }
 }

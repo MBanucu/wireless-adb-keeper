@@ -13,8 +13,9 @@ fields around it.
 
 | Field | Meaning |
 |---|---|
-| `app_version` | the installed version name |
+| `app_version` | the installed version name and version code |
 | `android` | Android release and SDK |
+| `boot_id` | the boot counter, so a kept line can be tied to its boot |
 | `uptime_s` | `SystemClock.elapsedRealtime()` in seconds |
 | `process_started_after_boot_s` | when this process started, relative to boot |
 | `unlocked` | whether credential-protected storage is readable |
@@ -38,6 +39,8 @@ fields around it.
 | `key_certificate` | the self-signed certificate file exists |
 | `journal_events` | how many entries the journal holds |
 | `journal_bytes` | the journal file size |
+| `journal_retention` | the journal-length setting: the default, last day, or off |
+| `journal_previous` | the previous build and boot that the kept block came from, or `none` |
 
 A row that is not granted contains the same sentence a failing action repeats,
 so the page shows `WRITE_SECURE_SETTINGS` is revoked before any button is
@@ -79,6 +82,53 @@ The window is bounded to one hour or 200 events, whichever comes first. When it
 ends, `diag.verbose.expired` is written once and the window switches itself off;
 a report therefore shows exactly where the noisy part stopped. With verbose off,
 none of the four codes above is written, so the journal behaves as before.
+
+## Sharing a report
+
+**Copy diagnostics** puts the snapshot and the journal on the clipboard.
+**Share diagnostics** sends the same text as one `ACTION_SEND` block, so a
+report can go straight into a GitHub issue without a laptop. The block is, in
+order: the `key=value` snapshot, `-- journal (oldest first) --`, and, when one
+is kept, `-- previous build ... --` with that file's lines. Nothing else is
+added, so the text in the issue is the text the page shows.
+
+## Journal length and rotation
+
+The **Journal length** radio buttons store the choice in device-protected prefs
+(`diag_retention`), like the verbose toggle, so it is readable before the first
+unlock and survives a reboot. It is read on every append, so a running monitor
+follows a change.
+
+| Setting | What is kept |
+|---|---|
+| Last 200 events or 32 KiB (default) | the newest 200 lines, and at most 32 KiB; whichever cap comes first |
+| Last day | lines from the last 24 hours, still bounded by 32 KiB so verbose logging cannot fill the disk |
+| Off | nothing: appends return before the file is opened, so the journal stops growing; the existing file is left as it is |
+
+The default is the same 200 events / 32 KiB ring as before. Trimming happens on
+append, from the front: the newest lines are the useful ones.
+
+On the first append after a version change, `events.log` is moved to
+`events.previous.log` and `previous.meta` records the version and boot the old
+journal came from. Only the last previous file is kept, so a chain of updates
+does not grow without limit. The page shows a **Previous build** section with
+the label (`previous build 1.9 (10), boot 42: 12 events from the previous
+install`) and the old lines, so a line from another install is never mistaken
+for this boot's. A journal that predates this feature is labelled
+`previous build unknown`: claiming it came from this build would be the exact
+mistake the rotation avoids.
+
+## Redaction probe
+
+`./gradlew probe` runs `DiagProbe`, a host-only check with no device. It writes
+a fake passphrase, control token and pairing code through the same
+`DiagJournal.append` path `Diag.event` uses, then reads the file back and fails
+loudly if any canary is present; it also checks that `off` creates no file and
+leaves an existing file byte-identical. The formatting and retention decisions
+live in `DiagFormat`, `DiagJournal`, `DiagRetention` and `DiagRotation`, which
+have no Android dependency, so the probe can run against a temporary file.
+`DiagJournalTest` repeats the canaries and the retention seams in the JVM
+suite.
 
 ## Reason codes
 
@@ -165,14 +215,19 @@ ring buffer, and never contains a passphrase, control token or pairing code.
 | `diag.verbose.observer` | info | verbose only: one per observed settings change |
 | `diag.verbose.network` | info | verbose only: one per network callback transition |
 | `diag.verbose.notification` | info | verbose only: one per notification update |
+| `diag.retention.default` | info | the journal length was set back to the default 200 events / 32 KiB |
+| `diag.retention.day` | info | the journal length was set to the last day |
+| `diag.retention.off` | info | journal writing was switched off; the existing file is kept |
 
 ## Secret canaries
 
 The journal formatter scrubs `passphrase=…`, `token=…` and `pairing_code=…`
 before a line is written or logged. No action passes those values in: pairing
 state is journalled as success/failure, and a passphrase failure names only the
-feature. `DiagReasonsTest` checks the formatter with canary values, and
-`PermissionAuditTest` checks that no audit row contains a secret-shaped value.
+feature. `DiagReasonsTest` checks the formatter with canary values,
+`PermissionAuditTest` checks that no audit row contains a secret-shaped value,
+and `DiagJournalTest` plus the `DiagProbe` in `./gradlew probe` write canaries
+through the real append path and assert the file contains none of them.
 
 ## One event per failure
 

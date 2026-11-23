@@ -30,6 +30,8 @@ import android.widget.CompoundButton;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
@@ -56,6 +58,10 @@ public class MainActivity extends Activity {
     private Switch verboseToggle;
     private TextView verboseNote;
     private CompoundButton.OnCheckedChangeListener verboseListener;
+    private RadioGroup retentionGroup;
+    private RadioGroup.OnCheckedChangeListener retentionListener;
+    private TextView diagPreviousNote;
+    private TextView diagPrevious;
     private Button serviceButton;
     private Button localButton;
     private EditText ssidField;
@@ -398,15 +404,56 @@ public class MainActivity extends Activity {
         root.addView(verboseHelp);
         updateVerboseUi();
 
+        root.addView(sectionLabel("Journal length"));
+        retentionGroup = new RadioGroup(this);
+        retentionGroup.setOrientation(RadioGroup.VERTICAL);
+        for (DiagRetention.Mode mode : DiagRetention.Mode.values()) {
+            RadioButton button = new RadioButton(this);
+            button.setText(mode.label());
+            button.setTextSize(14);
+            button.setTextColor(TEXT);
+            button.setTag(mode);
+            button.setId(View.generateViewId());
+            retentionGroup.addView(button, matchWrap());
+        }
+        retentionListener = new RadioGroup.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(RadioGroup group, int checkedId) {
+                View checked = group.findViewById(checkedId);
+                if (checked != null && checked.getTag() instanceof DiagRetention.Mode) {
+                    setRetention((DiagRetention.Mode) checked.getTag());
+                }
+            }
+        };
+        retentionGroup.setOnCheckedChangeListener(retentionListener);
+        root.addView(retentionGroup, matchWrap());
+        TextView retentionHelp = text("The default keeps the newest 200 events, or 32 KiB. "
+                + "\"Last day\" keeps events from the last 24 hours, still bounded by 32 KiB so "
+                + "verbose logging cannot fill the disk. Off stops every journal write; the "
+                + "existing file is left as it is.", 12, MUTED);
+        retentionHelp.setLineSpacing(dp(2), 1f);
+        retentionHelp.setLayoutParams(spaced(matchWrap(), 6));
+        root.addView(retentionHelp);
+        updateRetentionUi();
+
         root.addView(sectionLabel("Recent events"));
         diagJournal = monospace("");
         root.addView(diagJournal, matchWrap());
-        TextView keep = text("Newest last, capped at the last 200 events or 32 KiB. "
-                + "The file lives in device-protected storage, so a boot before the first "
-                + "unlock is recorded too.", 12, MUTED);
+        TextView keep = text("Newest last. The file lives in device-protected storage, so a "
+                + "boot before the first unlock is recorded too.", 12, MUTED);
         keep.setLineSpacing(dp(2), 1f);
         keep.setLayoutParams(spaced(matchWrap(), 6));
         root.addView(keep);
+
+        root.addView(sectionLabel("Previous build"));
+        diagPreviousNote = text("", 12, MUTED);
+        diagPreviousNote.setLineSpacing(dp(2), 1f);
+        diagPreviousNote.setLayoutParams(spaced(matchWrap(), 6));
+        diagPreviousNote.setVisibility(View.GONE);
+        root.addView(diagPreviousNote);
+        diagPrevious = monospace("");
+        diagPrevious.setVisibility(View.GONE);
+        root.addView(diagPrevious, matchWrap());
 
         root.addView(sectionLabel("Actions"));
         action(root, "Copy diagnostics",
@@ -415,6 +462,14 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View v) {
                 copyDiagnostics();
+            }
+        });
+        action(root, "Share diagnostics",
+                "Sends the snapshot and the events as one text block, for a GitHub issue.",
+                false, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                shareDiagnostics();
             }
         });
         action(root, "Refresh",
@@ -442,6 +497,7 @@ public class MainActivity extends Activity {
 
     private void refreshDiag() {
         updateVerboseUi();
+        updateRetentionUi();
         if (diagStatus == null || diagJournal == null) return;
         try {
             diagStatus.setText(Diag.status(this));
@@ -455,6 +511,19 @@ public class MainActivity extends Activity {
                     : journal);
         } catch (Throwable t) {
             diagJournal.setText("journal unavailable: " + t);
+        }
+        try {
+            String marker = Diag.previousMarker(this);
+            boolean hasPrevious = !marker.isEmpty();
+            diagPreviousNote.setText(marker);
+            diagPreviousNote.setVisibility(hasPrevious ? View.VISIBLE : View.GONE);
+            diagPrevious.setText(hasPrevious ? Diag.previousJournal(this) : "");
+            diagPrevious.setVisibility(hasPrevious ? View.VISIBLE : View.GONE);
+        } catch (Throwable t) {
+            diagPreviousNote.setText("previous build unavailable: " + t);
+            diagPreviousNote.setVisibility(View.VISIBLE);
+            diagPrevious.setText("");
+            diagPrevious.setVisibility(View.GONE);
         }
     }
 
@@ -473,6 +542,54 @@ public class MainActivity extends Activity {
         } catch (Throwable t) {
             toast("Could not copy: " + t);
         }
+    }
+
+    /** One text block, so the paste into a GitHub issue keeps the snapshot and journal together. */
+    private void shareDiagnostics() {
+        try {
+            Intent send = new Intent(Intent.ACTION_SEND);
+            send.setType("text/plain");
+            send.putExtra(Intent.EXTRA_SUBJECT, "Wireless ADB Keeper diagnostics");
+            send.putExtra(Intent.EXTRA_TEXT, Diag.report(this));
+            startActivity(Intent.createChooser(send, "Share diagnostics"));
+        } catch (Throwable t) {
+            toast("Could not share: " + t);
+        }
+    }
+
+    /** Applies a journal-length choice; the next append trims to it. */
+    private void setRetention(DiagRetention.Mode mode) {
+        DiagRetention.Mode before = DiagRetentionStore.mode(this);
+        if (before == mode) return;
+        if (mode == DiagRetention.Mode.OFF) {
+            // Record the change before off takes effect, then stop all writes.
+            Diag.info(this, "diag.retention.off", "journal writing off; "
+                    + Diag.count(this) + " events kept on disk");
+            DiagRetentionStore.setMode(this, mode);
+        } else {
+            DiagRetentionStore.setMode(this, mode);
+            Diag.info(this, "diag.retention." + mode.value(),
+                    "journal length set to " + mode.label());
+        }
+        toast("Journal length: " + mode.label());
+        updateRetentionUi();
+        refreshDiag();
+    }
+
+    /** Syncs the radio buttons with the stored mode without re-firing the listener. */
+    private void updateRetentionUi() {
+        if (retentionGroup == null) return;
+        DiagRetention.Mode mode = DiagRetentionStore.mode(this);
+        retentionGroup.setOnCheckedChangeListener(null);
+        for (int i = 0; i < retentionGroup.getChildCount(); i++) {
+            View child = retentionGroup.getChildAt(i);
+            if (child instanceof RadioButton && mode == child.getTag()) {
+                if (retentionGroup.getCheckedRadioButtonId() != child.getId()) {
+                    retentionGroup.check(child.getId());
+                }
+            }
+        }
+        retentionGroup.setOnCheckedChangeListener(retentionListener);
     }
 
     /**

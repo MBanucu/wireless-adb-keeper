@@ -137,6 +137,10 @@ val compileProbes = tasks.register<JavaCompile>("compileProbes") {
         file("src/io/github/mbanucu/wirelessadbkeeper/AdbIdentity.java"),
         file("src/io/github/mbanucu/wirelessadbkeeper/Base64Codec.java"),
         file("src/io/github/mbanucu/wirelessadbkeeper/ControlToken.java"),
+        file("src/io/github/mbanucu/wirelessadbkeeper/DiagFormat.java"),
+        file("src/io/github/mbanucu/wirelessadbkeeper/DiagJournal.java"),
+        file("src/io/github/mbanucu/wirelessadbkeeper/DiagRetention.java"),
+        file("src/io/github/mbanucu/wirelessadbkeeper/DiagRotation.java"),
         file("src/io/github/mbanucu/wirelessadbkeeper/TermuxResult.java"),
     )
     classpath = files(bootClasspath)
@@ -161,6 +165,15 @@ val probeResult = tasks.register<JavaExec>("probeResult") {
     dependsOn(compileProbes)
     classpath = files(probeClasses, bootClasspath)
     mainClass.set("io.github.mbanucu.wirelessadbkeeper.ResultProbe")
+}
+
+val probeDiag = tasks.register<JavaExec>("probeDiag") {
+    group = "verification"
+    description = "Runs DiagProbe: fake secrets through the journal append path; needs no device."
+    dependsOn(compileProbes)
+    classpath = files(probeClasses, bootClasspath)
+    mainClass.set("io.github.mbanucu.wirelessadbkeeper.DiagProbe")
+    args(layout.buildDirectory.dir("probe/diag").get().asFile.absolutePath)
 }
 
 val probePairLocal = tasks.register<Exec>("probePairLocal") {
@@ -209,8 +222,8 @@ val probeAdb = tasks.register<JavaExec>("probeAdb") {
 // fail on a machine with no adbd listening on 5555.
 tasks.register("probe") {
     group = "verification"
-    description = "Runs the device-free unit suites and host probes (scripts, TokenProbe, ResultProbe)."
-    dependsOn(probeUnit, probeToken, probeResult, probeScripts)
+    description = "Runs the device-free unit suites and host probes (scripts, TokenProbe, ResultProbe, DiagProbe)."
+    dependsOn(probeUnit, probeDiag, probeToken, probeResult, probeScripts)
 }
 
 // `check` stays the standard entry point, and it now includes the probe. AGP
@@ -218,8 +231,8 @@ tasks.register("probe") {
 // named; that keeps `./gradlew test` meaningful even though there is no JUnit
 // dependency to run.
 tasks.matching { it.name == "test" }.configureEach {
-    dependsOn(probeUnit, probeToken, probeResult, probeScripts)
+    dependsOn(probeUnit, probeDiag, probeToken, probeResult, probeScripts)
 }
 tasks.named("check") {
-    dependsOn(probeUnit, probeToken, probeResult, probeScripts)
+    dependsOn(probeUnit, probeDiag, probeToken, probeResult, probeScripts)
 }
