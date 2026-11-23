@@ -54,9 +54,12 @@ public class ControlProvider extends ContentProvider {
         }
 
         Bundle in = extras == null ? Bundle.EMPTY : extras;
-        String mode = in.getString("mode");
         // The positional value is the SSID for save_wifi and the mode for
-        // set_mode; the password only travels as a named extra.
+        // set_mode; the password only travels as a named extra. Reading the mode
+        // only from the extras made `keeper.sh mode local` pass null, which
+        // setMode treats as "toggle" — so asking for the mode it was already in
+        // switched it to the other one.
+        String mode = in.getString("mode", "set_mode".equals(method) ? arg : null);
         String ssid = in.getString("ssid", "save_wifi".equals(method) ? arg : null);
         String passphrase = in.getString("passphrase");
 
