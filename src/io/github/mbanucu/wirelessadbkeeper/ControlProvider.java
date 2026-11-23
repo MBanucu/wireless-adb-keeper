@@ -92,19 +92,16 @@ public class ControlProvider extends ContentProvider {
                 + " via " + (privileged ? "uid" : "token") + " for " + method);
 
         // The positional value is the SSID for save_wifi and the mode for
-        // set_mode; the password only travels as a named extra. Reading the mode
-        // only from the extras made `keeper.sh mode local` pass null, which
-        // setMode treats as "toggle" — so asking for the mode it was already in
-        // switched it to the other one.
-        String mode = in.getString("mode", "set_mode".equals(method) ? arg : null);
-        String ssid = in.getString("ssid", "save_wifi".equals(method) ? arg : null);
-        String passphrase = in.getString("passphrase");
+        // set_mode; the password only travels as a named extra. ControlArgs is
+        // where the fallback lives, so `keeper.sh mode local` cannot silently
+        // become a toggle again.
+        ControlArgs args = ControlArgs.of(method, arg, name -> in.getString(name));
 
         try {
-            String data = "token".equals(method) ? tokenReply(c)
-                    : execute(c, method, mode, ssid, passphrase);
+            String data = args.method == ControlArgs.Method.TOKEN ? tokenReply(c)
+                    : execute(c, args);
             int code = data.startsWith("error=") ? 400 : 0;
-            if ("token".equals(method)) {
+            if (args.method == ControlArgs.Method.TOKEN) {
                 // The one reply that is the secret. Keep it out of logcat even
                 // though the accept/refuse lines above are useful.
                 Log.i(TAG, "control token: "
@@ -142,45 +139,35 @@ public class ControlProvider extends ContentProvider {
         }
     }
 
-    private static String execute(Context c, String method, String mode,
-                                  String ssid, String passphrase) {
-        if ("status".equals(method)) {
-            return format(Keeper.status(c));
+    private static String execute(Context c, ControlArgs args) {
+        switch (args.method) {
+            case STATUS:
+                return format(Keeper.status(c));
+            case ENABLE:
+                return "result=" + Keeper.enable(c);
+            case WIFI_ON:
+                return Keeper.wifiOn(c);
+            case SERVICE_START:
+                return Keeper.service(c, true);
+            case SERVICE_STOP:
+                return Keeper.service(c, false);
+            case CONNECT:
+                return Keeper.connectNow(c);
+            case SET_MODE:
+                return Keeper.setMode(c, args.mode);
+            case SAVE_WIFI:
+                return Keeper.saveNetwork(c, args.ssid, args.passphrase);
+            case PIN_PORT:
+                return Keeper.pinPort(c);
+            case PUBKEY:
+                return Keeper.pubkey(c);
+            case DIAG:
+                return Diag.report(c);
+            case SCHEDULE:
+                return Keeper.schedule(c);
+            default:
+                return "error=unknown method " + args.name;
         }
-        if ("enable".equals(method)) {
-            return "result=" + Keeper.enable(c);
-        }
-        if ("wifi_on".equals(method)) {
-            return Keeper.wifiOn(c);
-        }
-        if ("service_start".equals(method)) {
-            return Keeper.service(c, true);
-        }
-        if ("service_stop".equals(method)) {
-            return Keeper.service(c, false);
-        }
-        if ("connect".equals(method)) {
-            return Keeper.connectNow(c);
-        }
-        if ("set_mode".equals(method)) {
-            return Keeper.setMode(c, mode);
-        }
-        if ("save_wifi".equals(method)) {
-            return Keeper.saveNetwork(c, ssid, passphrase);
-        }
-        if ("pin_port".equals(method)) {
-            return Keeper.pinPort(c);
-        }
-        if ("pubkey".equals(method)) {
-            return Keeper.pubkey(c);
-        }
-        if ("diag".equals(method)) {
-            return Diag.report(c);
-        }
-        if ("schedule".equals(method)) {
-            return Keeper.schedule(c);
-        }
-        return "error=unknown method " + method;
     }
 
     private static String format(Map<String, String> status) {

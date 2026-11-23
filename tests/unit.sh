@@ -25,13 +25,22 @@ mkdir -p "$here/out"
 
 # build.sh reads ANDROID_JAR, then the newest installed platform, then a jar
 # beside the script. Keep the same order: a stale android.jar at the repository
-# root must not win over an SDK platform that the app actually targets.
+# root must not win over an SDK platform that the app actually targets. CI sets
+# ANDROID_HOME/ANDROID_SDK_ROOT instead of keeping the SDK under $HOME, so both
+# are searched before the local Termux default.
 android_jar=${ANDROID_JAR:-}
 if [ -z "$android_jar" ]; then
     # `sort -V` matters: a plain lexicographic tail would put android-9 after
     # android-35, and an older jar then fails on constants the app uses.
-    android_jar=$(ls -1 "$HOME"/android-sdk/platforms/*/android.jar 2>/dev/null \
-        | sort -V | tail -1 || true)
+    for sdk in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "$HOME/android-sdk"; do
+        if [ -n "$sdk" ]; then
+            android_jar=$(ls -1 "$sdk"/platforms/*/android.jar 2>/dev/null \
+                | sort -V | tail -1 || true)
+        fi
+        if [ -n "$android_jar" ]; then
+            break
+        fi
+    done
 fi
 for candidate in "$here/android.jar" "$root/android.jar"; do
     if [ -z "$android_jar" ] && [ -f "$candidate" ]; then
@@ -44,7 +53,16 @@ fi
 
 # With a jar, compile the whole app: the suites may then reach any class and
 # the run classpath still has no android.jar. Without one, keep only the sources
-# that do not import android.*, which is enough for the pure suites.
+# that do not import android.* and skip the suites whose subjects do: the
+# identity and certificate classes import android.content.Context, so their
+# tests cannot compile when those classes are omitted.
+jar_only_test() {
+    case "$(basename "$1")" in
+        IdentityTest.java|CertificateTest.java) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 if [ -n "$android_jar" ]; then
     mapfile -t sources < <(find "$root/src" -name '*.java' | sort)
     echo "android.jar: $android_jar"
@@ -56,14 +74,26 @@ else
         fi
     done < <(find "$root/src" -name '*.java' | sort)
     echo "android.jar: not found; compiling Android-free sources only"
+    echo "skipped (needs android.jar): IdentityTest CertificateTest"
 fi
 
-# TestSupport and SuiteRunner are compiled but not discovered as suites.
-mapfile -t test_sources < <(find "$here/unit" -name '*.java' | sort)
-mapfile -t tests < <(find "$here/unit/java" -name '*Test.java' | sort)
+# TestSupport and SuiteRunner are compiled but not discovered as suites. The
+# two suites that compile against an Android-importing subject are left out of
+# both lists when there is no jar to compile that subject against.
+test_sources=()
+tests=()
+while IFS= read -r file; do
+    if [ -z "$android_jar" ] && jar_only_test "$file"; then
+        continue
+    fi
+    test_sources+=("$file")
+    if [[ "$file" == "$here"/unit/java/*Test.java ]]; then
+        tests+=("$file")
+    fi
+done < <(find "$here/unit" -name '*.java' | sort)
 
 if [ "${#tests[@]}" -eq 0 ]; then
-    echo "FAIL no *Test.java under $here/unit/java" >&2
+    echo "FAIL no runnable *Test.java under $here/unit/java" >&2
     exit 1
 fi
 
@@ -83,6 +113,9 @@ current=$listing.new
 } > "$current"
 
 if [ ! -f "$listing" ] || [ ! -d "$work" ] || ! cmp -s "$current" "$listing"; then
+    # Drop the old key before javac: a failed compile must not leave a listing
+    # that matches the partially filled output on the next run.
+    rm -f "$listing"
     rm -rf "$work"
     mkdir -p "$work"
     javac_args=(-nowarn --release 17 -encoding UTF-8 -d "$work")

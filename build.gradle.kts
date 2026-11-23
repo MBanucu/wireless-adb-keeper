@@ -110,17 +110,19 @@ tasks.named("preBuild") {
 // ---------------------------------------------------------------------------
 // Host probes (tools/)
 //
-// tools/AdbProbe.java, IdentityProbe.java and TokenProbe.java are diagnostics
-// that used to need a hand-written javac line. They are not part of the APK:
-// they get their own compile step, against the same android.jar AGP compiles
-// the app with, and a JavaExec task each. AdbIdentity and ControlToken import
+// tools/AdbProbe.java, TokenProbe.java and ResultProbe.java are diagnostics that
+// used to need a hand-written javac line. They are not part of the APK: they get
+// their own compile step, against the same android.jar AGP compiles the app
+// with, and a JavaExec task each. AdbProbe stays manual because it needs adbd
+// on this phone; the identity, certificate and provider checks are now suites
+// under tests/unit, so one gate (probeUnit) counts them. ControlToken imports
 // android.content.Context, so the jar is on the probe classpath even though the
-// probes never touch Context (the device-protected directory they use needs a
-// real device).
+// probe never touches Context (the device-protected directory needs a device).
 //
 // No test dependency is declared on purpose: JUnit is not in the offline Gradle
-// cache, so `test` would stop resolving on the phone. The probes are the
-// zero-dependency stand-in, and `test`/`check` depend on them.
+// cache, so `test` would stop resolving on the phone. The unit suites and the
+// remaining probes are the zero-dependency stand-in, and `test`/`check` depend
+// on them.
 // ---------------------------------------------------------------------------
 val probeClasses = layout.buildDirectory.dir("probe/classes")
 val bootClasspath = androidComponents.sdkComponents.bootClasspath
@@ -133,7 +135,6 @@ val compileProbes = tasks.register<JavaCompile>("compileProbes") {
         file("src/io/github/mbanucu/wirelessadbkeeper/AdbKey.java"),
         file("src/io/github/mbanucu/wirelessadbkeeper/AdbClient.java"),
         file("src/io/github/mbanucu/wirelessadbkeeper/AdbIdentity.java"),
-        file("src/io/github/mbanucu/wirelessadbkeeper/AdbCertificate.java"),
         file("src/io/github/mbanucu/wirelessadbkeeper/Base64Codec.java"),
         file("src/io/github/mbanucu/wirelessadbkeeper/ControlToken.java"),
         file("src/io/github/mbanucu/wirelessadbkeeper/TermuxResult.java"),
@@ -143,15 +144,6 @@ val compileProbes = tasks.register<JavaCompile>("compileProbes") {
     sourceCompatibility = "17"
     targetCompatibility = "17"
     options.encoding = "UTF-8"
-}
-
-val probeIdentity = tasks.register<JavaExec>("probeIdentity") {
-    group = "verification"
-    description = "Runs IdentityProbe (AdbKey, AdbIdentity, Base64Codec); needs no device."
-    dependsOn(compileProbes)
-    classpath = files(probeClasses, bootClasspath)
-    mainClass.set("io.github.mbanucu.wirelessadbkeeper.IdentityProbe")
-    args(layout.buildDirectory.dir("probe/identity").get().asFile.absolutePath)
 }
 
 val probeToken = tasks.register<JavaExec>("probeToken") {
@@ -204,8 +196,8 @@ val probeAdb = tasks.register<JavaExec>("probeAdb") {
 // fail on a machine with no adbd listening on 5555.
 tasks.register("probe") {
     group = "verification"
-    description = "Runs the device-free unit suites and host probes (scripts, IdentityProbe, TokenProbe, ResultProbe)."
-    dependsOn(probeUnit, probeIdentity, probeToken, probeResult, probeScripts)
+    description = "Runs the device-free unit suites and host probes (scripts, TokenProbe, ResultProbe)."
+    dependsOn(probeUnit, probeToken, probeResult, probeScripts)
 }
 
 // `check` stays the standard entry point, and it now includes the probe. AGP
@@ -213,8 +205,8 @@ tasks.register("probe") {
 // named; that keeps `./gradlew test` meaningful even though there is no JUnit
 // dependency to run.
 tasks.matching { it.name == "test" }.configureEach {
-    dependsOn(probeUnit, probeIdentity, probeToken, probeResult, probeScripts)
+    dependsOn(probeUnit, probeToken, probeResult, probeScripts)
 }
 tasks.named("check") {
-    dependsOn(probeUnit, probeIdentity, probeToken, probeResult, probeScripts)
+    dependsOn(probeUnit, probeToken, probeResult, probeScripts)
 }

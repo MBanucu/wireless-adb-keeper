@@ -75,48 +75,54 @@ public final class Ensurer {
     public static String ensure(Context c, String reason) {
         if (!hasPermission(c)) {
             Log.w(TAG, "ensure: missing WRITE_SECURE_SETTINGS");
-            return record(c, reason, "warn", "ensure.no_permission",
-                    "Missing WRITE_SECURE_SETTINGS permission");
+            return record(c, reason, EnsureDecision.Reason.NO_PERMISSION);
         }
         if (!isWifiConnected(c)) {
             Log.i(TAG, "ensure: no Wi-Fi, skipping");
-            return record(c, reason, "info", "ensure.no_wifi", "Wi-Fi not connected");
+            return record(c, reason, EnsureDecision.Reason.NO_WIFI);
         }
         ContentResolver cr = c.getContentResolver();
         try {
-            if (Settings.Global.getInt(cr, KEY_DEV_SETTINGS, 0) == 0) {
+            boolean devSettingsOn = Settings.Global.getInt(cr, KEY_DEV_SETTINGS, 0) != 0;
+            boolean adbOn = Settings.Global.getInt(cr, KEY_ADB_WIFI, 0) == 1;
+            EnsureDecision.Reason decision = EnsureDecision.decide(
+                    new EnsureDecision.Inputs(true, true, true, devSettingsOn, adbOn));
+            if (!devSettingsOn) {
                 Settings.Global.putInt(cr, KEY_DEV_SETTINGS, 1);
                 Log.i(TAG, "enabled developer settings");
             }
-            if (Settings.Global.getInt(cr, KEY_ADB_WIFI, 0) != 1) {
+            if (decision == EnsureDecision.Reason.CHANGED) {
                 Settings.Global.putInt(cr, KEY_ADB_WIFI, 1);
                 quietUntil = SystemClock.elapsedRealtime() + QUIET_MS;
                 Log.i(TAG, "enabled wireless debugging");
-                return record(c, reason, "info", "ensure.changed",
-                        "Enabled wireless debugging");
+            } else {
+                Log.i(TAG, "ensure: already enabled");
             }
-            Log.i(TAG, "ensure: already enabled");
-            return record(c, reason, "info", "ensure.noop", "Already enabled");
+            return record(c, reason, decision);
         } catch (Exception e) {
             Log.e(TAG, "ensure failed", e);
-            return record(c, reason, "error", "ensure.failed", "Error: " + e);
+            return record(c, reason, EnsureDecision.Reason.FAILED, "Error: " + e);
         }
     }
 
     /** Last journalled ensure result, so a repeated one does not flood the log. */
     private static volatile String lastRecorded = "";
 
-    private static String record(Context c, String reason, String level, String code,
+    private static String record(Context c, String reason, EnsureDecision.Reason decision) {
+        return record(c, reason, decision, decision.result());
+    }
+
+    private static String record(Context c, String reason, EnsureDecision.Reason decision,
                                  String result) {
         if (!result.equals(lastRecorded)) {
             lastRecorded = result;
             String detail = reason + ": " + result;
-            if ("warn".equals(level)) {
-                Diag.warn(c, code, detail);
-            } else if ("error".equals(level)) {
-                Diag.error(c, code, detail);
+            if ("warn".equals(decision.level())) {
+                Diag.warn(c, decision.code(), detail);
+            } else if ("error".equals(decision.level())) {
+                Diag.error(c, decision.code(), detail);
             } else {
-                Diag.info(c, code, detail);
+                Diag.info(c, decision.code(), detail);
             }
         }
         return result;
