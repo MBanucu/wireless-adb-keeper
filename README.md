@@ -70,6 +70,9 @@ samples and cannot be published, so it is the GitHub-handle form instead.
   mDNS, then the phone's TCP table or a scan) and sends `adb tcpip 5555`. Run by the
   app, not by hand. Its last stdout line is `RESULT pinned=5555` (or
   `RESULT error=no-adbd`); see [Script result contract](#script-result-contract).
+- `pair-local.sh` — one-time bootstrap for a phone that has never been paired:
+  pairs adbd over loopback and prints `uid=2000(shell)` as proof. See
+  [Pair from Termux, no laptop](#pair-from-termux-no-laptop).
 - `keeper.sh` — laptop/Termux-side wrapper that maps friendly command names onto the
   app's content provider, and prints the `key=value` reply.
 - `keeperctl.sh` — the same friendly commands straight from a Termux prompt, without
@@ -174,7 +177,7 @@ app's `android.jar`, so neither needs a hand-written `javac` line:
 ./gradlew probeUnit   # the tests/unit suites, no device, no JUnit
 ./gradlew probe       # probeUnit plus TokenProbe, ResultProbe and the scripts
 ./gradlew probeResult # TermuxResult: the RESULT-line parser, no device
-./gradlew probeScripts # pin-adb-port.sh, wait_adb.sh, wifi-on.sh with a fake adb
+./gradlew probeScripts # pin-adb-port.sh, wait_adb.sh, wifi-on.sh, pair-local.sh with a fake adb
 ./gradlew probeAdb    # AdbProbe: needs a phone with adbd on 127.0.0.1:5555
 ./gradlew probeAdb -PadbKey=$HOME/.android/adbkey -PadbPort=5555 -PadbPinPort=5555
 ./gradlew probeAdb -PadbTcpip=true   # also sends `tcpip:5555` and times the re-pin
@@ -214,6 +217,74 @@ device-protected storage (built as DER by hand, so `src/` needs no BouncyCastle;
 (`_adb-tls-pairing._tcp`). **Test connection** then opens `shell:id` over the
 trusted TLS port — that, not the key file, is the proof: adbd only answers a key
 it has stored, and `/data/misc/adb/adb_keys` is unreadable to this app anyway.
+
+### Pair from Termux, no laptop
+
+`pair-local.sh` is the bootstrap for a phone that has never been paired with
+anything. It runs `adb pair` against adbd's pairing service on `127.0.0.1`, then
+discovers the connect port with the shared helper and runs `adb connect`. It
+prints the `adb shell id` reply; `uid=2000(shell)` in it is the proof. adbd only
+answers a key it has stored, so that line means Termux's `~/.android/adbkey` is
+the key adbd just learned.
+
+```bash
+./pair-local.sh 123456          # pairing port from mDNS
+./pair-local.sh 123456 37123    # ... or typed from the dialog
+PAIR_CODE=123456 ADB_PAIR_PORT=37123 ./pair-local.sh
+```
+
+What a person has to do, and what the script does:
+
+| Step | Who |
+| --- | --- |
+| Enable **Developer options → Wireless debugging** | person |
+| Tap **Pair device with pairing code** and keep the dialog on screen | person |
+| Read and type the 6-digit code | person (the code is not in mDNS or a property) |
+| Find `_adb-tls-pairing._tcp` | script (mDNS; a typed port if mDNS is unavailable) |
+| `adb pair 127.0.0.1:<port> <code>` | script |
+| Find `_adb-tls-connect._tcp`, else the shared discovery helper | script |
+| `adb connect`, then `adb shell id` as the proof | script |
+
+The dialog has to stay open until `adb pair` returns: its advertisement exists
+only while it is up. The script never scans for a pairing port: the
+advertisement is the only reliable way to tell the pairing listener from adbd's
+TLS port, so a missing advertisement means the port has to be typed. If mDNS
+cannot see it, pass the port the dialog shows as the second argument (or
+`ADB_PAIR_PORT`); the error says so instead of guessing.
+
+The connect port is always rediscovered, so a wireless-debugging toggle is
+handled by re-running the script. Nothing here uses the pinned 5555 either:
+pairing can happen before any pin exists.
+
+#### Spike findings
+
+Verified without a phone:
+
+- Termux's adb is `37.0.0p1-android-tools` and has `adb pair HOST[:PORT]
+  [PAIRING CODE]`. That proves the client command exists, not that adbd accepts
+  a loopback pairing connection.
+- `adb mdns services` is not usable here: this adb says `mdns is not supported
+  by this version of adb`. The browser is `adb-mdns.py`, the same zeroconf path
+  the keeper already uses for the connect port; it now takes the service name
+  as an argument and browses `_adb-tls-pairing._tcp.local.` for this script.
+- With a fake adb and fake mDNS (`tools/pair-local-test.sh`,
+  `./gradlew probeScripts`) the flow covers success, wrong code, wireless
+  debugging off, no pairing service, a stale port, no mDNS, a typed port, and
+  rediscovery of both ports after a toggle.
+
+The four unknowns, and what this change can honestly say about them:
+
+| Unknown | Status |
+| --- | --- |
+| 1. `adb pair 127.0.0.1:<port> <code>` with no laptop | **Device check.** Nothing host-side can prove adbd accepts its own loopback address. The script's `Successfully paired` plus `uid=2000(shell)` is that test. |
+| 2. Pairing port without reading the dialog | **Partly verified; visibility is a device check.** Android advertises `_adb-tls-pairing._tcp` while the dialog is open (the app's pairing screen already reads it), and the helper can now browse it from Termux. Whether the advertisement is visible from Termux on this Wi-Fi, or over loopback with Wi-Fi off, is not verified here. The README's existing constraint — adbd only listens while a Wi-Fi network is connected — suggests Wi-Fi-off loopback is the unlikely case; that is a hypothesis, not a measurement. |
+| 3. Connect port after pairing | **Device check; the script does not depend on it.** If `_adb-tls-connect._tcp` is advertised it is used directly. Otherwise `discover.sh` reads the phone's `/proc/net/tcp` when a serial is attached, or scans the loopback range as the last resort. No port is hardcoded. |
+| 4. Pairing lifetime with the screen off (DokeOS) | **Device check / hypothesis.** The service is tied to the dialog, not to a timer this repo can observe. Treat "open the dialog, note the code, run the script promptly" as the supported flow; whether DokeOS keeps it alive with the screen off has not been measured. |
+
+Not yet checked on a phone: the real loopback `adb pair`, which key adbd stores,
+whether the pairing advertisement appears when Wi-Fi is off, whether the connect
+advertisement appears immediately after pairing, and the screen-off lifetime.
+The script is written so that the last three are discovered rather than assumed.
 
 ## Install
 

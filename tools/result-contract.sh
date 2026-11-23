@@ -18,7 +18,7 @@ done
 chmod +x "$WORK/repo/pin-adb-port.sh" "$WORK/repo/wait_adb.sh" "$WORK/repo/wifi-on.sh"
 
 cat > "$WORK/bin/adb" <<'FAKE'
-#!/usr/bin/env bash
+#!/bin/sh
 mode=${FAKE_ADB_MODE:-device}
 if [ "$1" = "-s" ]; then
     shift 2

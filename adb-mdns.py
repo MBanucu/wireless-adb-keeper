@@ -2,11 +2,15 @@
 """Print the ports advertised by adbd over mDNS.
 
 Android's wireless debugging advertises `_adb-tls-connect._tcp` itself, so the
-port can be read without scanning. adb's own client-side discovery is compiled
-out of both the Termux and nixpkgs builds, but the advertisement is standard
-mDNS and any browser can read it.
+port can be read without scanning. While the "Pair device with pairing code"
+dialog is open it also advertises `_adb-tls-pairing._tcp`; pass that service as
+the second argument to read the pairing port instead.
 
-Usage: ./adb-mdns.py [seconds]   (default 4)
+adb's own client-side discovery is compiled out of both the Termux and nixpkgs
+builds (`adb mdns services` says "mdns is not supported"), but the
+advertisement is standard mDNS and any browser can read it.
+
+Usage: ./adb-mdns.py [seconds] [service]   (default 4, _adb-tls-connect._tcp.local.)
 Prints one port per line, newest advertisement first.
 """
 import re
@@ -18,7 +22,8 @@ try:
 except ImportError:
     sys.exit("zeroconf not installed (pip install zeroconf)")
 
-SERVICE = "_adb-tls-connect._tcp.local."
+DEFAULT_SERVICE = "_adb-tls-connect._tcp.local."
+SERVICE = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_SERVICE
 seconds = float(sys.argv[1]) if len(sys.argv) > 1 else 4.0
 
 found = {}  # port -> instance name
@@ -45,7 +50,7 @@ zc.close()
 
 def generation(item):
     """Android names each new adbd instance "name", "name (2)", "name (3)"..."""
-    match = re.search(r"\((\d+)\)\._adb-tls-connect", item[1])
+    match = re.search(r"\((\d+)\)\.", item[1])
     return int(match.group(1)) if match else 1
 
 
@@ -59,8 +64,12 @@ def listening(port):
         return False
 
 
-# Cached advertisements can outlive the adbd that made them, so only print ports
-# that still accept connections. They are tried newest advertisement first.
+# Cached advertisements can outlive the adbd that made them, so connect ports
+# are only printed while they still accept connections. A pairing advertisement
+# lives only while the dialog is open and its port is proved by `adb pair`, so
+# it is reported as advertised rather than probed with a plain TCP connect.
+# Ports are tried newest advertisement first.
+probe = SERVICE == DEFAULT_SERVICE
 for port, _ in sorted(found.items(), key=generation, reverse=True):
-    if listening(port):
+    if not probe or listening(port):
         print(port)

@@ -163,9 +163,16 @@ val probeResult = tasks.register<JavaExec>("probeResult") {
     mainClass.set("io.github.mbanucu.wirelessadbkeeper.ResultProbe")
 }
 
+val probePairLocal = tasks.register<Exec>("probePairLocal") {
+    group = "verification"
+    description = "Checks pair-local.sh with a fake adb and fake mDNS; needs no device."
+    commandLine("bash", layout.projectDirectory.file("tools/pair-local-test.sh").asFile.absolutePath)
+}
+
 val probeScripts = tasks.register<Exec>("probeScripts") {
     group = "verification"
     description = "Checks the scripts' final RESULT line with a fake adb; needs no device."
+    dependsOn(probePairLocal)
     commandLine("bash", layout.projectDirectory.file("tools/result-contract.sh").asFile.absolutePath)
 }
 
