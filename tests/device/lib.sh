@@ -352,11 +352,14 @@ passphrase_present() {
         return
     fi
     xml=$(prefs local_wifi.xml)
-    case $xml in
-        *'name="passphrase_ciphertext"'*|*'name="passphrase"'*)
-            printf 'present\n' ;;
-        *) printf 'absent\n' ;;
-    esac
+    # Profiles keep their ciphertext under profile.<id>_ciphertext; older
+    # builds used the two passphrase* keys directly.
+    if printf '%s' "$xml" | grep -q -E \
+        'name="(passphrase|passphrase_ciphertext|profile\.[^"]+_ciphertext)"'; then
+        printf 'present\n'
+    else
+        printf 'absent\n'
+    fi
 }
 
 # Called once by the runner before any suite. It records more than the minimum

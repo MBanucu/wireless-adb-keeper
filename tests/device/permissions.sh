@@ -39,8 +39,9 @@ assert_permission() {
     assert_eq "status location is $field_value" "$field_value" \
         "$(printf '%s\n' "$status_text" | field location)"
     diag_text=$(keeper diag)
-    assert_eq "diag perm_location is $field_value" "$field_value" \
-        "$(printf '%s\n' "$diag_text" | field perm_location)"
+    # The audit row also carries the exact grant command when it is denied.
+    assert_contains "diag perm.fine_location reports $field_value" "$field_value" \
+        "$(printf '%s\n' "$diag_text" | field perm.fine_location)"
 }
 
 original=$(permission_state "$(dump)" "$PERM")
