@@ -132,6 +132,40 @@ final class PassphraseStore {
                 .apply();
     }
 
+    /**
+     * Moves the pre-slot passphrase (the one older builds wrote) into a named
+     * slot in one commit, so the profile store can migrate without ever
+     * exposing the plaintext in prefs.
+     *
+     * <p>An existing value in the slot wins; the old keys are still removed.
+     * An absent or undecryptable legacy value leaves the slot as it is. False
+     * means the Keystore could not encrypt, and the legacy keys are untouched
+     * for a later retry.
+     */
+    static boolean adoptLegacy(Context c, String slot) {
+        String existing = getSecret(c, slot);
+        String legacy = get(c);
+        if (legacy == null || legacy.isEmpty()) {
+            clear(c);
+            return true;
+        }
+        if (existing != null && !existing.isEmpty()) {
+            clear(c);
+            return true;
+        }
+        String[] sealed = seal(c, legacy);
+        if (sealed == null) return false;
+        // One edit: the slot appears and every old copy disappears together.
+        prefs(c).edit()
+                .putString(ciphertextKey(slot), sealed[0])
+                .putString(ivKey(slot), sealed[1])
+                .remove(KEY_CIPHERTEXT)
+                .remove(KEY_IV)
+                .remove(LEGACY_KEY)
+                .apply();
+        return true;
+    }
+
     private static String ciphertextKey(String slot) {
         return slot + CIPHERTEXT_SUFFIX;
     }

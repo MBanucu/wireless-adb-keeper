@@ -100,14 +100,15 @@ public final class Keeper {
         if (ssid == null || ssid.trim().isEmpty()) {
             return "error=ssid is required";
         }
-        LocalWifi.setSsid(c, ssid.trim());
-        if (passphrase != null && !LocalWifi.setPassphrase(c, passphrase)) {
-            return "error=could not encrypt the passphrase";
-        }
+        // The single-network command now saves by SSID, so an existing network
+        // is updated instead of becoming a second profile. Security stays as
+        // configured; this path has no security argument.
+        ProfileTable.Outcome saved = Profiles.save(c, ssid, null, passphrase);
+        if (!saved.ok()) return "error=" + saved.error();
         LocalWifi.bumpRevision(c);
-        String saved = LocalWifi.passphrase(c);
-        return "ssid=" + LocalWifi.ssid(c)
-                + ", passphrase=" + (saved == null || saved.isEmpty() ? "none" : "set")
+        String savedPass = Profiles.secret(c, saved.profile().id());
+        return "ssid=" + saved.profile().ssid()
+                + ", passphrase=" + (savedPass == null || savedPass.isEmpty() ? "none" : "set")
                 + ", reload=" + reloadTarget();
     }
 

@@ -324,19 +324,21 @@ public class MainActivity extends Activity {
                 false, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                LocalWifi.setSsid(MainActivity.this, ssidField.getText().toString());
                 String typed = passField.getText().toString();
                 // The field starts empty, so an empty field means "keep the
                 // stored passphrase"; only a newly typed value replaces it.
-                if (!typed.isEmpty()
-                        && !LocalWifi.setPassphrase(MainActivity.this, typed)) {
-                    toast("Could not store the password securely");
+                ProfileTable.Outcome saved = Profiles.save(MainActivity.this,
+                        ssidField.getText().toString(), null,
+                        typed.isEmpty() ? null : typed);
+                if (!saved.ok()) {
+                    toast("Could not save: " + saved.error());
+                    return;
                 }
                 sendServiceAction(MonitorService.ACTION_RELOAD_LOCAL);
-                ssidField.setText(LocalWifi.ssid(MainActivity.this));
+                ssidField.setText(saved.profile().ssid());
                 passField.setText("");
                 passField.setHint(passphraseHint());
-                toast("Saved: " + LocalWifi.ssid(MainActivity.this));
+                toast("Saved: " + saved.profile().ssid());
                 refreshStatus();
             }
         });

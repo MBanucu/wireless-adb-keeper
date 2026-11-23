@@ -32,6 +32,7 @@ public final class LocalWifi {
 
     public static final String DEFAULT_SSID = "";
     public static final String PREFS = "local_wifi";
+    /** The pre-profiles key; migrated to a profile and never written again. */
     public static final String KEY_SSID = "ssid";
     public static final String KEY_ENABLED = "enabled";
     public static final String KEY_MODE = "mode";
@@ -73,15 +74,19 @@ public final class LocalWifi {
     }
 
     public static String ssid(Context c) {
-        return c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .getString(KEY_SSID, DEFAULT_SSID);
+        Profile profile = Profiles.active(c);
+        return profile == null ? DEFAULT_SSID : profile.ssid();
     }
 
+    /**
+     * The single-network spelling of a save: updates the profile with this SSID
+     * (or appends one). New code should call {@link Profiles#save} directly so
+     * the SSID and password land in one change.
+     */
     public static void setSsid(Context c, String value) {
         String clean = value == null ? "" : value.trim();
-        if (clean.isEmpty()) clean = DEFAULT_SSID;
-        c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit().putString(KEY_SSID, clean).apply();
+        if (clean.isEmpty()) return;
+        Profiles.save(c, clean, null, null);
     }
 
     public static boolean enabled(Context c) {
@@ -96,12 +101,17 @@ public final class LocalWifi {
 
     /** The saved passphrase, or null when the Keystore cannot decrypt it. */
     public static String passphrase(Context c) {
-        return PassphraseStore.get(c);
+        return Profiles.secret(c);
     }
 
-    /** Stores the passphrase encrypted; false means the Keystore failed. */
+    /**
+     * Stores the passphrase encrypted; false means the Keystore failed. This is
+     * the single-network spelling and targets the active profile; use
+     * {@link Profiles#save} or {@link Profiles#update} for another one.
+     */
     public static boolean setPassphrase(Context c, String value) {
-        return PassphraseStore.put(c, value);
+        Profile profile = Profiles.active(c);
+        return profile != null && Profiles.setSecret(c, profile.id(), value);
     }
 
     public static String mode(Context c) {
