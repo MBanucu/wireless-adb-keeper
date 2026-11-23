@@ -24,6 +24,10 @@ import android.os.UserManager;
 import android.provider.Settings;
 import android.util.Log;
 
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+
 public class MonitorService extends Service {
     public static volatile boolean running = false;
     public static final String ACTION_CONNECT_LOCAL = "io.github.mbanucu.wirelessadbkeeper.CONNECT_LOCAL";
@@ -31,8 +35,13 @@ public class MonitorService extends Service {
     private static final String CHANNEL_ID = "monitor";
     private static final int NOTIFICATION_ID = 1;
 
-    /** 5555 is cheap to probe, so it is re-checked more often than the 15 min job. */
-    private static final long PIN_CHECK_MS = 60_000L;
+    /**
+     * 5555 is cheap to probe, so it is re-checked more often than the 15 min job.
+     * 10 s keeps a port that closes with no network event inside #5's <= 30 s
+     * target; Termux itself is still asked at most once per PinnedPort's 30 s
+     * window, whatever this interval does.
+     */
+    private static final long PIN_CHECK_MS = 10_000L;
 
     private Handler handler;
     private ConnectivityManager.NetworkCallback networkCallback;
@@ -40,6 +49,10 @@ public class MonitorService extends Service {
     private BroadcastReceiver unlockReceiver;
     private Runnable ensureRunnable;
     private Runnable pinTick;
+    private Runnable pinRecheck;
+    /** Whether the one-shot recheck is already queued; keeps ticks from stacking it. */
+    private volatile boolean pinRecheckPending;
+    private ExecutorService pinExecutor;
     private SharedPreferences prefs;
     private SharedPreferences.OnSharedPreferenceChangeListener prefsListener;
     private String pendingReason = "";
@@ -76,6 +89,14 @@ public class MonitorService extends Service {
             applyMode("service created");
         }
         scheduleEnsure("service created", 0);
+        pinExecutor = Executors.newSingleThreadExecutor();
+        pinRecheck = new Runnable() {
+            @Override
+            public void run() {
+                pinRecheckPending = false;
+                checkPin(true);
+            }
+        };
         startPinLoop(8000);
         Log.i(Ensurer.TAG, "MonitorService started"
                 + (userUnlocked() ? "" : " (before unlock)"));
@@ -355,39 +376,55 @@ public class MonitorService extends Service {
      * Runs a pin attempt now (or soon) and keeps re-checking the fixed port while
      * the service lives. The port itself is probed and repaired by PinnedPort;
      * this only decides how often it is asked to look.
+     *
+     * Timing stays on the main handler and the probe runs on one worker thread.
+     * A fresh Thread per tick with a 15 s sleep could outlive onDestroy; here
+     * the recheck is just another delayed message and onDestroy removes both.
      */
     private void startPinLoop(long delayMs) {
         if (pinTick != null) {
             handler.removeCallbacks(pinTick);
         }
+        // A network or ensure event makes a pending recheck redundant.
+        handler.removeCallbacks(pinRecheck);
+        pinRecheckPending = false;
         pinTick = new Runnable() {
             @Override
             public void run() {
-                new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        String state = PinnedPort.check(MonitorService.this);
-                        Log.i(Ensurer.TAG, "pin check: " + state);
-                        recordPinState(state);
-                        if (!state.startsWith("listening")) {
-                            // The Termux script needs a few seconds; probe again
-                            // before the long interval so a pin that worked is
-                            // not reported as closed for a whole minute.
-                            try {
-                                Thread.sleep(15_000L);
-                            } catch (InterruptedException ignored) {
-                                return;
-                            }
-                            String again = PinnedPort.check(MonitorService.this);
-                            Log.i(Ensurer.TAG, "pin check: " + again);
-                            recordPinState(again);
-                        }
-                    }
-                }).start();
-                handler.postDelayed(pinTick, PIN_CHECK_MS);
+                checkPin(false);
+                handler.postDelayed(this, PIN_CHECK_MS);
             }
         };
         handler.postDelayed(pinTick, delayMs);
+    }
+
+    /** Probes the fixed port on the single pin worker, never on the main thread. */
+    private void checkPin(final boolean recheck) {
+        final ExecutorService executor = pinExecutor;
+        if (executor == null) return;
+        try {
+            executor.execute(new Runnable() {
+                @Override
+                public void run() {
+                    if (!running) return;
+                    String state = PinnedPort.check(MonitorService.this);
+                    // onDestroy may have run while the probe was in flight.
+                    if (!running) return;
+                    Log.i(Ensurer.TAG, "pin check: " + state);
+                    recordPinState(state);
+                    if (!recheck && !state.startsWith("listening") && !pinRecheckPending) {
+                        // The Termux script needs a few seconds; probe again
+                        // before the next tick, so a pin that worked is not
+                        // reported as closed for a whole interval. PinnedPort's
+                        // quiet window keeps the recheck from asking twice.
+                        pinRecheckPending = true;
+                        handler.postDelayed(pinRecheck, 15_000L);
+                    }
+                }
+            });
+        } catch (RejectedExecutionException ignored) {
+            // onDestroy shut the worker down.
+        }
     }
 
     @Override
@@ -396,6 +433,16 @@ public class MonitorService extends Service {
         if (pinTick != null) {
             handler.removeCallbacks(pinTick);
             pinTick = null;
+        }
+        if (pinRecheck != null) {
+            handler.removeCallbacks(pinRecheck);
+            pinRecheckPending = false;
+        }
+        if (pinExecutor != null) {
+            // Interrupts a scheduled task and refuses later submissions; an
+            // in-flight probe is bounded by its 400 ms socket timeout.
+            pinExecutor.shutdownNow();
+            pinExecutor = null;
         }
         if (localWifi != null) {
             localWifi.stop();

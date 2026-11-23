@@ -44,7 +44,7 @@ samples and cannot be published, so it is the GitHub-handle form instead.
   passphrase. Kept as a non-default mode.
 - `ControlProvider` — the adb command surface: the same actions the buttons run,
   reachable with `adb shell content call` and readable through `keeper.sh`.
-- `PinnedPort` — probes `127.0.0.1:5555` every minute and, when nothing listens, asks
+- `PinnedPort` — probes `127.0.0.1:5555` every 10 seconds and, when nothing listens, asks
   Termux to run `pin-adb-port.sh` through Termux's own `RUN_COMMAND` API. All the
   decisions (when to ask, how often, whether Termux is usable) live here.
 - `WifiRadio` — switches the Wi-Fi radio on. Apps lost that right in Android 10, so it
@@ -340,8 +340,16 @@ Measured on this phone (Android 15, unrooted):
 
 | event | 5555 closed → reachable |
 | --- | --- |
-| `adb usb`, monitor service running | ≤ 30 s (next one-minute tick) |
+| monitor service running: Wi-Fi back, wireless debugging re-enabled, `adb usb`, or adbd dying | ≤ ~16 s: a port that closes with no event is noticed by the 10 s probe, a network/ensure event schedules a check 15 s later, and the Termux script takes about a second |
 | reboot, without touching anything | ≈ 60 s after `sys.boot_completed` (boot receiver → ask → `tcpip`) |
+
+The first check after the service starts runs 8 s in. The monitor's checks ask Termux at
+most once per 30 s, so a close that follows an ask inside that window waits for the
+window to pass (≤ ~31 s); `keeper.sh pin` and the button ask immediately. After a closed
+result the port is probed once more 15 s later; that is when `pinned_port=` catches up,
+so the status line can lag the port by up to 15 s.
+The 10 s probe interval is what keeps the no-event case inside #5's ≤ 30 s target; the
+probe is a loopback connect, and the 30 s window still limits what Termux is asked to do.
 
 The Termux script itself takes about a second once it has a serial to talk to. Pinning
 survives the keeper re-enabling wireless debugging: adbd restarts with a fresh TLS port
