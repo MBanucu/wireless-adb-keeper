@@ -22,12 +22,22 @@ if [ -z "${JAR:-}" ] || [ ! -f "$JAR" ]; then
 fi
 echo "== using $JAR =="
 
+# d8 and the manifest must agree on the minimum API. Reading it here means a
+# future minSdk bump cannot leave the dex behind: the value comes from the one
+# file aapt also packages. (Gradle reads the same attribute for its defaultConfig.)
+MIN_SDK=$(sed -n 's/.*android:minSdkVersion="\([0-9][0-9]*\)".*/\1/p' AndroidManifest.xml | head -1)
+if [ -z "$MIN_SDK" ]; then
+    echo "could not read android:minSdkVersion from AndroidManifest.xml" >&2
+    exit 1
+fi
+echo "== min API $MIN_SDK (AndroidManifest.xml) =="
+
 echo "== compiling =="
 javac -source 8 -target 8 -cp "$JAR" -d build/classes \
     $(find src -name '*.java')
 
 echo "== dexing =="
-d8 --min-api 24 --lib "$JAR" --output build/dex \
+d8 --min-api "$MIN_SDK" --lib "$JAR" --output build/dex \
     $(find build/classes -name '*.class')
 
 echo "== packaging =="
