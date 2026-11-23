@@ -78,6 +78,13 @@ re-pins 5555 and times it); `PinnedPort` and `WifiRadio` untouched.
 sequence, its encoded public key matches `.android/adbkey.pub` byte for byte, and both
 builds still pass. **Met.**
 
+The signature encoding was also checked against the platform's own provider, not just
+re-derived by hand: `tools/ProviderProbe` signs a token and verifies the block with
+`NONEwithRSA`, and rejects it under `SHA1withRSA` (which hashes the token again — the
+mistake the javadoc warns about). Run on the phone with
+`dalvikvm -cp probe.jar …ProviderProbe`, it reports `AndroidOpenSSL version 1.0` and all
+four checks pass, so Conscrypt and the JDK agree on the block `AdbKey.sign` produces.
+
 *Risk:* protocol handshake details (checksum, `AUTH` signature padding, shell v2 vs
 legacy shell). Note for M3: adb's TLS is an `STLS` upgrade of the same socket, not a
 TLS socket handed in at construction, so the "wrap it unchanged" idea was wrong — the
