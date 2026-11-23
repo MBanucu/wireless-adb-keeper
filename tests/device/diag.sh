@@ -24,7 +24,7 @@ journal_text=$(journal)
 assert_eq "the journal is not empty" 1 \
     "$([ -n "$journal_text" ] && echo 1 || echo 0)"
 bad=$(printf '%s\n' "$journal_text" | grep -Ev \
-    '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z [0-9]+s (info|warn|error) [a-z0-9_]+\.[a-z0-9_]+( .*)?$' \
+    '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z [0-9]+s (info|warn|error) [a-z0-9_]+(\.[a-z0-9_]+)+( .*)?$' \
     || true)
 assert_eq "every journal line is 'time uptime level code detail'" "" "$bad"
 
