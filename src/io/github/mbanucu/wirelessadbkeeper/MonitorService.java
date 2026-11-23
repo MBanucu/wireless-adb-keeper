@@ -43,11 +43,15 @@ public class MonitorService extends Service {
     private LocalWifi localWifi;
     /** Whether the credential-protected Wi-Fi mode has been applied. */
     private boolean applied;
+    /** Last journalled pin state, so an unchanged check does not fill the log. */
+    private String lastPinState = "";
 
     @Override
     public void onCreate() {
         super.onCreate();
         running = true;
+        // First, so the journal reads start -> mode -> ensure in that order.
+        Diag.info(this, "svc.start", "unlocked=" + userUnlocked());
         handler = new Handler(Looper.getMainLooper());
         createChannel();
         // From targetSdk 34 the type has to be passed here as well as declared
@@ -73,6 +77,18 @@ public class MonitorService extends Service {
                 + (userUnlocked() ? "" : " (before unlock)"));
     }
 
+    /** Journals a pin state only when it changes; the loop runs every minute. */
+    private void recordPinState(String state) {
+        if (state == null || state.equals(lastPinState)) return;
+        lastPinState = state;
+        if (state.startsWith("listening")) {
+            Diag.info(this, "pin.state", state);
+        } else {
+            Diag.warn(this, "pin.state", state);
+        }
+    }
+
+
     /** True once credential-encrypted storage and the Wi-Fi prefs are readable. */
     private boolean userUnlocked() {
         UserManager um = (UserManager) getSystemService(Context.USER_SERVICE);
@@ -84,6 +100,7 @@ public class MonitorService extends Service {
             @Override
             public void onReceive(Context context, Intent intent) {
                 Log.i(Ensurer.TAG, "user unlocked; applying saved Wi-Fi mode");
+                Diag.info(MonitorService.this, "svc.unlocked", "applying saved mode");
                 applyMode("user unlocked");
                 scheduleEnsure("user unlocked", 0);
             }
@@ -111,6 +128,8 @@ public class MonitorService extends Service {
             LocalWifi.state = "auto";
             LocalWifi.detail = suggestionDetail(status);
             Log.i(Ensurer.TAG, "mode auto (" + reason + "): " + LocalWifi.detail);
+            Diag.info(this, "svc.mode", reason + ": auto-connect, " + LocalWifi.detail
+                    + " (status " + status + ")");
         } else {
             WifiSuggestion.remove(this);
             if (localWifi == null) {
@@ -119,6 +138,7 @@ public class MonitorService extends Service {
                 localWifi.restart();
             }
             Log.i(Ensurer.TAG, "mode local-only (" + reason + ")");
+            Diag.info(this, "svc.mode", reason + ": local-only");
         }
         updateNotification();
     }
@@ -256,7 +276,7 @@ public class MonitorService extends Service {
             @Override
             public void run() {
                 ensureRunnable = null;
-                String result = Ensurer.ensure(MonitorService.this);
+                String result = Ensurer.ensure(MonitorService.this, pendingReason);
                 Log.i(Ensurer.TAG, "monitor ensure (" + pendingReason + "): " + result);
                 if (result.startsWith("Enabled")) {
                     // adbd restarts with the new setting; give it time to listen
@@ -280,7 +300,8 @@ public class MonitorService extends Service {
                 LocalWifi.state = "auto";
                 LocalWifi.detail = suggestionDetail(status);
                 Log.i(Ensurer.TAG, "mode auto (connect now): " + LocalWifi.detail);
-                Log.i(Ensurer.TAG, "mode auto (connect now): " + LocalWifi.detail);
+                Diag.info(this, "svc.connect", "auto-connect, " + LocalWifi.detail
+                        + " (status " + status + ")");
                 updateNotification();
             } else if (localWifi != null) {
                 localWifi.retryNow();
@@ -318,6 +339,7 @@ public class MonitorService extends Service {
                     public void run() {
                         String state = PinnedPort.check(MonitorService.this);
                         Log.i(Ensurer.TAG, "pin check: " + state);
+                        recordPinState(state);
                         if (!state.startsWith("listening")) {
                             // The Termux script needs a few seconds; probe again
                             // before the long interval so a pin that worked is
@@ -327,8 +349,9 @@ public class MonitorService extends Service {
                             } catch (InterruptedException ignored) {
                                 return;
                             }
-                            Log.i(Ensurer.TAG, "pin check: "
-                                    + PinnedPort.check(MonitorService.this));
+                            String again = PinnedPort.check(MonitorService.this);
+                            Log.i(Ensurer.TAG, "pin check: " + again);
+                            recordPinState(again);
                         }
                     }
                 }).start();

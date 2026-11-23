@@ -62,13 +62,25 @@ public final class Ensurer {
     }
 
     public static String ensure(Context c) {
+        return ensure(c, "on demand");
+    }
+
+    /**
+     * As {@link #ensure(Context)}, naming the trigger for the journal.
+     *
+     * <p>The result is journalled only when it changes: this runs on the
+     * monitor's timer and from a periodic job, so an unchanged "already
+     * enabled" every minute would push every useful entry out of the ring.
+     */
+    public static String ensure(Context c, String reason) {
         if (!hasPermission(c)) {
             Log.w(TAG, "ensure: missing WRITE_SECURE_SETTINGS");
-            return "Missing WRITE_SECURE_SETTINGS permission";
+            return record(c, reason, "warn", "ensure.no_permission",
+                    "Missing WRITE_SECURE_SETTINGS permission");
         }
         if (!isWifiConnected(c)) {
             Log.i(TAG, "ensure: no Wi-Fi, skipping");
-            return "Wi-Fi not connected";
+            return record(c, reason, "info", "ensure.no_wifi", "Wi-Fi not connected");
         }
         ContentResolver cr = c.getContentResolver();
         try {
@@ -80,13 +92,33 @@ public final class Ensurer {
                 Settings.Global.putInt(cr, KEY_ADB_WIFI, 1);
                 quietUntil = SystemClock.elapsedRealtime() + QUIET_MS;
                 Log.i(TAG, "enabled wireless debugging");
-                return "Enabled wireless debugging";
+                return record(c, reason, "info", "ensure.changed",
+                        "Enabled wireless debugging");
             }
             Log.i(TAG, "ensure: already enabled");
-            return "Already enabled";
+            return record(c, reason, "info", "ensure.noop", "Already enabled");
         } catch (Exception e) {
             Log.e(TAG, "ensure failed", e);
-            return "Error: " + e;
+            return record(c, reason, "error", "ensure.failed", "Error: " + e);
         }
+    }
+
+    /** Last journalled ensure result, so a repeated one does not flood the log. */
+    private static volatile String lastRecorded = "";
+
+    private static String record(Context c, String reason, String level, String code,
+                                 String result) {
+        if (!result.equals(lastRecorded)) {
+            lastRecorded = result;
+            String detail = reason + ": " + result;
+            if ("warn".equals(level)) {
+                Diag.warn(c, code, detail);
+            } else if ("error".equals(level)) {
+                Diag.error(c, code, detail);
+            } else {
+                Diag.info(c, code, detail);
+            }
+        }
+        return result;
     }
 }

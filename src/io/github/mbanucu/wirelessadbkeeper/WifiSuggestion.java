@@ -64,6 +64,7 @@ public final class WifiSuggestion {
             security = SEC_OWE;
         } else if (pass == null || pass.isEmpty()) {
             Log.w(Ensurer.TAG, "wifi suggestion: no password stored for " + ssid);
+            Diag.warn(c, "wifi.suggest.no_password", ssid + ": auto-connect needs the password");
             return -2;
         } else {
             // A WPA3-only AP rejects a WPA2 passphrase; a WPA2/WPA3 transition
@@ -88,6 +89,7 @@ public final class WifiSuggestion {
             suggestion = suggest(ssid, security, secret);
         } catch (Exception e) {
             Log.e(Ensurer.TAG, "wifi suggestion: build failed", e);
+            Diag.error(c, "wifi.suggest.build_failed", ssid + " (" + security + "): " + e);
             return -3;
         }
 
@@ -95,13 +97,20 @@ public final class WifiSuggestion {
             int status = wm.addNetworkSuggestions(Collections.singletonList(suggestion));
             Log.i(Ensurer.TAG, "wifi suggestion added for " + ssid + " (" + security
                     + "): status " + status);
-            if (status == STATUS_SUCCESS
-                    && !PassphraseStore.putSecret(c, SLOT_APPLIED, wanted)) {
-                Log.w(Ensurer.TAG, "wifi suggestion: could not encrypt applied record");
+            if (status == STATUS_SUCCESS) {
+                Diag.info(c, "wifi.suggest.added", ssid + " (" + security + ")");
+                if (!PassphraseStore.putSecret(c, SLOT_APPLIED, wanted)) {
+                    Log.w(Ensurer.TAG, "wifi suggestion: could not encrypt applied record");
+                    Diag.warn(c, "wifi.suggest.record_unsealed", ssid);
+                }
+            } else {
+                Diag.warn(c, "wifi.suggest.failed", ssid + " (" + security
+                        + "): status " + status);
             }
             return status;
         } catch (Exception e) {
             Log.e(Ensurer.TAG, "wifi suggestion: addNetworkSuggestions failed", e);
+            Diag.error(c, "wifi.suggest.failed", ssid + ": " + e);
             return -4;
         }
     }
