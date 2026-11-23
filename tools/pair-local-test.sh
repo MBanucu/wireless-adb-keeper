@@ -19,7 +19,7 @@ done
 # The fake helper replaces adb-mdns.py in the copied tree, so discovery finds
 # the state files rather than the real zeroconf browser.
 cat > "$WORK/repo/adb-mdns.py" <<'FAKE_MDNS'
-#!/usr/bin/env bash
+#!/bin/sh
 set -u
 state=${FAKE_STATE:?}
 service=${2:-_adb-tls-connect._tcp.local.}
@@ -36,7 +36,7 @@ chmod +x "$WORK/repo/adb-mdns.py"
 # discover_mdns_available() asks python3 for zeroconf. The fake only answers
 # that probe; the scenarios here never reach the scan.
 cat > "$WORK/bin/python3" <<'FAKE_PY'
-#!/usr/bin/env bash
+#!/bin/sh
 if [ "${FAKE_NO_ZEROCONF:-}" = 1 ]; then
     exit 1
 fi
@@ -45,7 +45,7 @@ FAKE_PY
 chmod +x "$WORK/bin/python3"
 
 cat > "$WORK/bin/adb" <<'FAKE_ADB'
-#!/usr/bin/env bash
+#!/bin/sh
 set -u
 state=${FAKE_STATE:?}
 printf '%s\n' "$*" >> "$state/calls.log"
