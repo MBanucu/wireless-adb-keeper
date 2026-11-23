@@ -197,6 +197,11 @@ it has stored, and `/data/misc/adb/adb_keys` is unreadable to this app anyway.
 PHONE_SERIAL=192.168.77.232:5555 ./install.sh     # or just ./install.sh
 ```
 
+With no argument, `install.sh` installs `wifidebug.apk` in the repo root, the
+file `./build.sh` signs. Pass a path to install something else; the Gradle build
+is signed with a different key, so it cannot update an app installed by
+`build.sh`.
+
 `install.sh` does the install and then the four grants, because a reinstall
 silently drops them:
 
