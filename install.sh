@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # install.sh -- install the app and hand it the grants it cannot ask for.
 #
-#   ./install.sh                      # build/wifidebug.apk, first device
+#   ./install.sh                      # wifidebug.apk (from ./build.sh), first device
 #   ./install.sh path/to/app.apk
 #   PHONE_SERIAL=192.168.77.232:5555 ./install.sh
 #
@@ -14,11 +14,11 @@
 # nobody re-reads.
 set -uo pipefail
 
-APK=${1:-build/wifidebug.apk}
+APK=${1:-wifidebug.apk}
 SERIAL=${PHONE_SERIAL:-}
 PKG=io.github.mbanucu.wirelessadbkeeper
 
-[ -f "$APK" ] || { echo "no APK at $APK; build first (see README)" >&2; exit 1; }
+[ -f "$APK" ] || { echo "no APK at $APK; run ./build.sh first, or pass the APK path" >&2; exit 1; }
 
 pick_serial() {
     [ -n "$SERIAL" ] && return 0
