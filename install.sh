@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/data/data/com.termux/files/usr/bin/bash
 # install.sh -- install the app and hand it the grants it cannot ask for.
 #
 #   ./install.sh                      # wifidebug.apk (from ./build.sh), first device
