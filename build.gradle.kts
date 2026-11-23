@@ -169,10 +169,16 @@ val probePairLocal = tasks.register<Exec>("probePairLocal") {
     commandLine("bash", layout.projectDirectory.file("tools/pair-local-test.sh").asFile.absolutePath)
 }
 
+val probeDeviceTooling = tasks.register<Exec>("probeDeviceTooling") {
+    group = "verification"
+    description = "Checks tests/device.sh with a fake adb, capture and connect; needs no device."
+    commandLine("bash", layout.projectDirectory.file("tools/device-tooling-test.sh").asFile.absolutePath)
+}
+
 val probeScripts = tasks.register<Exec>("probeScripts") {
     group = "verification"
     description = "Checks the scripts' final RESULT line with a fake adb; needs no device."
-    dependsOn(probePairLocal)
+    dependsOn(probePairLocal, probeDeviceTooling)
     commandLine("bash", layout.projectDirectory.file("tools/result-contract.sh").asFile.absolutePath)
 }
 
