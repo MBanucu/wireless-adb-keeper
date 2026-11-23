@@ -7,7 +7,11 @@
 #   ./keeper.sh start | stop
 #   ./keeper.sh connect
 #   ./keeper.sh mode auto | mode local
+#   ./keeper.sh profiles      (id, SSID, security, passphrase state, priority)
 #   ./keeper.sh save SSID [PASSWORD]
+#   ./keeper.sh save --profile ID SSID [PASSWORD]
+#   ./keeper.sh profile-rm ID
+#   ./keeper.sh priority ID N
 #   ./keeper.sh pin
 #   ./keeper.sh pubkey
 #   ./keeper.sh schedule
@@ -33,7 +37,7 @@ call() {
 }
 
 usage() {
-    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -70,16 +74,47 @@ case "$command" in
             *) echo "usage: $0 mode auto|local" >&2; exit 2 ;;
         esac
         ;;
+    profiles) call --method profiles ;;
     save)
-        if [ $# -lt 1 ] || [ -z "$1" ]; then
+        profile=
+        if [ "${1:-}" = "--profile" ]; then
+            if [ $# -lt 3 ] || [ -z "${2:-}" ] || [ -z "${3:-}" ]; then
+                echo "usage: $0 save --profile ID SSID [PASSWORD]" >&2
+                exit 2
+            fi
+            profile=$2
+            shift 2
+        fi
+        if [ $# -lt 1 ] || [ -z "${1:-}" ]; then
             echo "usage: $0 save SSID [PASSWORD]" >&2
             exit 2
         fi
-        if [ $# -ge 2 ]; then
+        if [ -n "$profile" ]; then
+            if [ $# -ge 2 ]; then
+                call --method save_wifi --arg "$1" --extra "id:s:$profile" \
+                    --extra "passphrase:s:$2"
+            else
+                call --method save_wifi --arg "$1" --extra "id:s:$profile"
+            fi
+        elif [ $# -ge 2 ]; then
             call --method save_wifi --arg "$1" --extra "passphrase:s:$2"
         else
             call --method save_wifi --arg "$1"
         fi
+        ;;
+    profile-rm)
+        if [ $# -lt 1 ] || [ -z "${1:-}" ]; then
+            echo "usage: $0 profile-rm ID" >&2
+            exit 2
+        fi
+        call --method remove_profile --arg "$1"
+        ;;
+    priority)
+        if [ $# -lt 2 ] || [ -z "${1:-}" ] || [ -z "${2:-}" ]; then
+            echo "usage: $0 priority ID N" >&2
+            exit 2
+        fi
+        call --method set_priority --arg "$1" --extra "priority:s:$2"
         ;;
     -h|--help|help) usage 0 ;;
     *) echo "unknown command: $command" >&2; usage 2 ;;

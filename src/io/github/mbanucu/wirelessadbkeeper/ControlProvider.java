@@ -10,8 +10,6 @@ import android.os.Bundle;
 import android.os.Process;
 import android.util.Log;
 
-import java.util.Map;
-
 /**
  * Runs the keeper's actions from adb instead of a finger.
  *
@@ -26,8 +24,8 @@ import java.util.Map;
  * app-reachable twin for the case the `content` command cannot serve.
  *
  * The reply bundle carries "code" (0 ok, 4xx/5xx error) and "data": one
- * key=value line per field for `status` and `pubkey`, one line for everything
- * else.
+ * key=value line per field for `status`, `profiles` and `pubkey`, one line for
+ * everything else.
  *
  * <p>The caller gate is uid based (shell/root/system/self) with a control token
  * as the alternative for an ordinary app. {@code --method token} mints that
@@ -105,9 +103,9 @@ public class ControlProvider extends ContentProvider {
                 // The one reply that is the secret. Keep it out of logcat even
                 // though the accept/refuse lines above are useful.
                 Log.i(TAG, "control token: "
-                        + (code == 0 ? "minted (not logged)" : oneLine(data)));
+                        + (code == 0 ? "minted (not logged)" : ControlText.oneLine(data)));
             } else {
-                Log.i(TAG, "control " + method + ": " + oneLine(data));
+                Log.i(TAG, "control " + method + ": " + ControlText.oneLine(data));
             }
             return new Result(code, data);
         } catch (Throwable t) {
@@ -142,7 +140,7 @@ public class ControlProvider extends ContentProvider {
     private static String execute(Context c, ControlArgs args) {
         switch (args.method) {
             case STATUS:
-                return format(Keeper.status(c));
+                return ControlText.lines(Keeper.status(c));
             case ENABLE:
                 return "result=" + Keeper.enable(c);
             case WIFI_ON:
@@ -156,7 +154,15 @@ public class ControlProvider extends ContentProvider {
             case SET_MODE:
                 return Keeper.setMode(c, args.mode);
             case SAVE_WIFI:
-                return Keeper.saveNetwork(c, args.ssid, args.passphrase);
+                return args.id == null || args.id.isEmpty()
+                        ? Keeper.saveNetwork(c, args.ssid, args.passphrase)
+                        : Keeper.saveProfile(c, args.id, args.ssid, args.passphrase);
+            case PROFILES:
+                return Keeper.profiles(c);
+            case REMOVE_PROFILE:
+                return Keeper.removeProfile(c, args.id);
+            case SET_PRIORITY:
+                return Keeper.setPriority(c, args.id, args.priority);
             case PIN_PORT:
                 return Keeper.pinPort(c);
             case PUBKEY:
@@ -168,20 +174,6 @@ public class ControlProvider extends ContentProvider {
             default:
                 return "error=unknown method " + args.name;
         }
-    }
-
-    private static String format(Map<String, String> status) {
-        StringBuilder out = new StringBuilder();
-        for (Map.Entry<String, String> e : status.entrySet()) {
-            if (out.length() > 0) out.append('\n');
-            out.append(e.getKey()).append('=').append(oneLine(e.getValue()));
-        }
-        return out.toString();
-    }
-
-    /** Keeps one field on one line so the reply stays parseable. */
-    private static String oneLine(String value) {
-        return value == null ? "" : value.replace('\n', ' ').replace('\r', ' ');
     }
 
     private static Bundle reply(int code, String data) {

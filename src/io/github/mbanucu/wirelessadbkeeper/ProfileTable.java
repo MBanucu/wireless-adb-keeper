@@ -65,6 +65,7 @@ public final class ProfileTable {
     public static final String ERROR_UNKNOWN = "no such profile";
     public static final String ERROR_DUPLICATE = "another profile already uses this SSID";
     public static final String ERROR_SECRET = "could not encrypt the passphrase";
+    public static final String ERROR_PRIORITY = "priority is out of range";
 
     /** The non-secret prefs, adapted from SharedPreferences or a test map. */
     public interface Store {
@@ -293,6 +294,33 @@ public final class ProfileTable {
         secrets.clear(appliedSlot(id));
         if (index == 0) secrets.clear(LEGACY_APPLIED_SLOT);
         return Outcome.ok(removed == null ? new Profile(id, "", SECURITY_AUTO) : removed);
+    }
+
+    /**
+     * Moves a profile to a 1-based position in the try order.
+     *
+     * <p>The order is the {@code profile_ids} list itself, so a move is one
+     * write of that marker and nothing else: the SSID, security and secret stay
+     * with the id. A position outside {@code 1..count} is refused without
+     * touching the store.
+     */
+    public synchronized Outcome move(String id, int priority) {
+        migrate();
+        List<String> ids = ids();
+        int from = id == null ? -1 : ids.indexOf(id);
+        if (from < 0) return Outcome.fail(ERROR_UNKNOWN);
+        if (priority < 1 || priority > ids.size()) return Outcome.fail(ERROR_PRIORITY);
+
+        List<String> updated = new ArrayList<>(ids);
+        updated.remove(from);
+        updated.add(priority - 1, id);
+        if (!updated.equals(ids)) {
+            Map<String, String> puts = new LinkedHashMap<>();
+            puts.put(IDS_KEY, join(updated));
+            store.write(puts, new LinkedHashSet<String>());
+        }
+        Profile moved = read(id);
+        return Outcome.ok(moved == null ? new Profile(id, "", SECURITY_AUTO) : moved);
     }
 
     private Outcome updateInternal(List<String> ids, String id, Profile existing, String ssid,

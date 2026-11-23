@@ -31,6 +31,8 @@ public final class ProfileTableTest {
         renameKeepsTheIdAndRejectsADuplicateTarget();
         deleteRemovesTheSecretAndTheAppliedRecord();
         deleteUnknownIsANamedError();
+        moveReordersWithoutTouchingTheProfile();
+        moveRefusesAnUnknownIdOrPosition();
         securityIsNormalizedAndValidated();
         aFailedSecretWriteLeavesTheStoreAlone();
         idsAreOpaqueAndOrdered();
@@ -211,6 +213,63 @@ public final class ProfileTableTest {
         check("deleting an unknown id fails", false, removed.ok());
         check("the unknown delete is named", "no such profile", removed.error());
         check("the store is untouched by an unknown delete", 1, table.count());
+    }
+
+    private static void moveReordersWithoutTouchingTheProfile() {
+        MapStore store = new MapStore();
+        MapSecrets secrets = new MapSecrets();
+        ProfileTable table = new ProfileTable(store, secrets);
+        table.save("Home", "wpa2", "one");
+        table.save("Lab", "wpa3", "two");
+        table.save("Flat", null, "three");
+
+        check("the initial order is save order", "p1,p2,p3",
+                store.values.get(ProfileTable.IDS_KEY));
+        ProfileTable.Outcome moved = table.move("p3", 1);
+        check("a move succeeds", true, moved.ok());
+        check("a move returns the moved profile", "Flat", moved.profile().ssid());
+        check("moving to the front changes the id order", "p3,p1,p2",
+                store.values.get(ProfileTable.IDS_KEY));
+        check("the moved profile keeps its secret", "three",
+                secrets.slots.get(ProfileTable.secretSlot("p3")));
+        check("the moved profile keeps its security", "", table.list().get(0).security());
+
+        table.move("p2", 2);
+        check("moving to the middle works", "p3,p2,p1",
+                store.values.get(ProfileTable.IDS_KEY));
+        table.move("p3", 3);
+        check("moving to the back works", "p2,p1,p3",
+                store.values.get(ProfileTable.IDS_KEY));
+        check("a move never adds or drops a profile", 3, table.count());
+
+        int writes = store.writes;
+        table.move("p2", 1);
+        check("moving a profile to its own position writes nothing", writes, store.writes);
+    }
+
+    private static void moveRefusesAnUnknownIdOrPosition() {
+        MapStore store = new MapStore();
+        MapSecrets secrets = new MapSecrets();
+        ProfileTable table = new ProfileTable(store, secrets);
+        table.save("Home", null, "one");
+        table.save("Lab", null, "two");
+        String before = store.values.get(ProfileTable.IDS_KEY);
+
+        ProfileTable.Outcome unknown = table.move("nope", 1);
+        check("moving an unknown id fails", false, unknown.ok());
+        check("the unknown move is named", "no such profile", unknown.error());
+        check("the unknown move leaves the order alone", before,
+                store.values.get(ProfileTable.IDS_KEY));
+
+        ProfileTable.Outcome zero = table.move("p1", 0);
+        check("priority 0 is refused", false, zero.ok());
+        check("the refused priority is named", "priority is out of range", zero.error());
+        ProfileTable.Outcome past = table.move("p1", 3);
+        check("a priority past the end is refused", false, past.ok());
+        check("a refused priority leaves the order alone", before,
+                store.values.get(ProfileTable.IDS_KEY));
+        check("a refused priority leaves the profile alone", "Home",
+                table.list().get(0).ssid());
     }
 
     private static void securityIsNormalizedAndValidated() {

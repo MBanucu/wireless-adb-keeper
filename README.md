@@ -33,12 +33,13 @@ samples and cannot be published, so it is the GitHub-handle form instead.
   secure setting via `ContentObserver`, and re-enables wireless debugging when needed.
 - `Ensurer` — the actual setting write, with a 3 s quiet window so its own change
   notification cannot cause a write/notify loop (which would restart adbd repeatedly).
-- `WifiSuggestion` — registers a `WifiNetworkSuggestion` marked `setIsMetered(true)`,
-  using the saved passphrase (none for an open or OWE network), WPA3 when the scan says
-  the AP is WPA3-only, and enhanced open for OWE. Approve the system notification once;
-  Android reconnects on its own afterwards, including after reboots. Being metered and
-  never validating, it does not become the default route, so mobile data keeps carrying
-  internet.
+- `WifiSuggestion` — registers one `WifiNetworkSuggestion` per profile, each marked
+  `setIsMetered(true)`, using that profile's saved passphrase (none for an open or OWE
+  network), WPA3 when the scan says the AP is WPA3-only, and enhanced open for OWE. A
+  per-profile applied record under `suggestion_applied.<id>` lets one profile be removed
+  without touching the others. Approve the system notification once; Android reconnects
+  on its own afterwards, including after reboots. Being metered and never validating, it
+  does not become the default route, so mobile data keeps carrying internet.
 - `LocalWifi` — optional local-only mode using `WifiNetworkSpecifier`. This can never be
   silent: Android shows a dialog on every reconnect, and the app supplies the saved
   passphrase. Kept as a non-default mode.
@@ -46,7 +47,7 @@ samples and cannot be published, so it is the GitHub-handle form instead.
   (`default`, `p1`, ...), one profile per SSID, capped at 16. Passphrases stay only in
   the encrypted `PassphraseStore`, under `profile.<id>`. The first read of an upgraded
   install turns the old single SSID and passphrase into `default`, so nothing has to be
-  retyped.
+  retyped. The list is also available from adb/Termux through `keeper.sh profiles`.
 - `ControlProvider` — the adb command surface: the same actions the buttons run,
   reachable with `adb shell content call` and readable through `keeper.sh`.
   `ControlReceiver` is the same dispatch over an ordered broadcast, the only
@@ -356,12 +357,42 @@ force-stopped or only just installed, which a broadcast cannot do.
 ./keeper.sh start | stop      # monitor service
 ./keeper.sh connect           # Connect now
 ./keeper.sh mode auto|local   # Connect mode
-./keeper.sh save SSID [PASS]  # Save SSID and password
+./keeper.sh profiles          # saved profiles, one line each, in try order
+./keeper.sh save SSID [PASS]  # Save SSID and password (add or update)
+./keeper.sh save --profile ID SSID [PASS]  # update one profile by id
+./keeper.sh profile-rm ID     # delete a profile, its secret and applied record
+./keeper.sh priority ID N     # move a profile in the try order (1 is first)
 ./keeper.sh pin               # Pin adb port 5555 now
 ./keeper.sh pubkey            # the app's own ADB public key
 ./keeper.sh schedule          # 15-minute keep-alive job
 ./keeper.sh diag              # status snapshot + recent events
 ```
+
+### Profiles from the command line
+
+`profiles` prints one line per saved network, in try order:
+
+```
+id=default ssid=WP22 security=wpa2 passphrase=set priority=1
+id=p1 ssid=Lab security=auto passphrase=none priority=2
+```
+
+`security=auto` means the security is decided from the scan; the four explicit
+values are `wpa2`, `wpa3`, `owe` and `open`. The passphrase itself is never part
+of a reply; `passphrase=set|none` is all that is reported. With nothing saved,
+`profiles` replies `profiles=0`.
+
+`save SSID [PASSWORD]` keeps its old meaning: the profile with that SSID is
+updated, or a new one is appended, so calling it twice with the same SSID does
+not create a duplicate. `save --profile ID SSID [PASSWORD]` targets one id
+instead; a rename keeps that id, and an unknown id is an error rather than an
+implicit add. `profile-rm ID` deletes the profile, its ciphertext and its
+applied-suggestion record. `priority ID N` moves a profile to a 1-based
+position, where 1 is tried first; a position outside the list is refused.
+
+`status` also reports `profiles=<n>` and `profile_active=<id>` (the first
+profile in the try order). A save, rename, delete or move writes one coded
+journal event: `profile.added`, `profile.updated` or `profile.removed`.
 
 `mode` and `save` reply with `reload=monitor` when a running monitor applied the
 change, or `reload=next start` when no service was running: the value is saved in
@@ -425,7 +456,11 @@ token.
 ./keeperctl.sh wifi-on
 ./keeperctl.sh connect | stop
 ./keeperctl.sh mode auto|local
+./keeperctl.sh profiles
 ./keeperctl.sh save SSID [PASS]
+./keeperctl.sh save --profile ID SSID [PASS]
+./keeperctl.sh profile-rm ID
+./keeperctl.sh priority ID N
 ./keeperctl.sh schedule
 ./keeperctl.sh diag
 ```

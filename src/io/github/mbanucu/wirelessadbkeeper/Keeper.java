@@ -9,6 +9,7 @@ import android.os.Build;
 
 import java.io.File;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -116,15 +117,121 @@ public final class Keeper {
         // The single-network command now saves by SSID, so an existing network
         // is updated instead of becoming a second profile. Security stays as
         // configured; this path has no security argument.
+        boolean existed = Profiles.bySsid(c, ssid) != null;
         ProfileTable.Outcome saved = Profiles.save(c, ssid, null, passphrase);
         if (!saved.ok()) {
-            return fail(c, DiagReasons.profileFailure(saved.error()),
-                    DiagReasons.profileDetail(saved.error()));
+            return profileFailure(c, saved.error());
         }
         LocalWifi.bumpRevision(c);
+        profileChanged(c, existed ? DiagReasons.ProfileChange.UPDATED
+                : DiagReasons.ProfileChange.ADDED, saved.profile());
         String savedPass = Profiles.secret(c, saved.profile().id());
         return "ssid=" + saved.profile().ssid()
                 + ", passphrase=" + (savedPass == null || savedPass.isEmpty() ? "none" : "set")
+                + ", reload=" + reloadTarget();
+    }
+
+    /**
+     * Saves an explicitly named profile, so a rename cannot create a second
+     * profile for the same SSID. An unknown id is an error, not an implicit add:
+     * {@code save SSID} is the command that creates.
+     */
+    public static String saveProfile(Context c, String id, String ssid, String passphrase) {
+        String cleanId = id == null ? "" : id.trim();
+        if (cleanId.isEmpty()) {
+            return fail(c, DiagReasons.Failure.PROFILE_UNKNOWN,
+                    DiagReasons.profileDetail(ProfileTable.ERROR_UNKNOWN));
+        }
+        if (ssid == null || ssid.trim().isEmpty()) {
+            return fail(c, DiagReasons.Failure.SSID_MISSING, "ssid is required");
+        }
+        ProfileTable.Outcome saved = Profiles.update(c, cleanId, ssid, null, passphrase);
+        if (!saved.ok()) {
+            return profileFailure(c, saved.error());
+        }
+        LocalWifi.bumpRevision(c);
+        profileChanged(c, DiagReasons.ProfileChange.UPDATED, saved.profile());
+        String savedPass = Profiles.secret(c, saved.profile().id());
+        return "id=" + saved.profile().id()
+                + ", ssid=" + saved.profile().ssid()
+                + ", passphrase=" + (savedPass == null || savedPass.isEmpty() ? "none" : "set")
+                + ", reload=" + reloadTarget();
+    }
+
+    /**
+     * One line per profile, in try order: id, SSID, security, whether a
+     * passphrase is stored and the 1-based priority. The passphrase itself is
+     * never read into the reply.
+     */
+    public static String profiles(Context c) {
+        List<Profile> profiles = Profiles.list(c);
+        if (profiles.isEmpty()) return "profiles=0";
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < profiles.size(); i++) {
+            Profile profile = profiles.get(i);
+            if (out.length() > 0) out.append('\n');
+            out.append(ControlText.profile(profile, i + 1,
+                    Profiles.hasSecret(c, profile.id())));
+        }
+        return out.toString();
+    }
+
+    /** Deletes a profile, its ciphertext and its applied-suggestion record. */
+    public static String removeProfile(Context c, String id) {
+        String cleanId = id == null ? "" : id.trim();
+        if (cleanId.isEmpty()) {
+            return fail(c, DiagReasons.Failure.PROFILE_UNKNOWN,
+                    DiagReasons.profileDetail(ProfileTable.ERROR_UNKNOWN));
+        }
+        // Remove the platform suggestion while the applied record still names
+        // it; ProfileTable.remove clears that record. On failure keep both so
+        // the user can retry instead of leaving an untracked suggestion behind.
+        if (!WifiSuggestion.removeOne(c, cleanId)) {
+            String detail = "could not remove the suggestion for " + cleanId
+                    + "; profile kept; retry the command";
+            Diag.warn(c, "wifi.suggest.refused", detail);
+            return "error=" + detail;
+        }
+        ProfileTable.Outcome removed = Profiles.remove(c, cleanId);
+        if (!removed.ok()) {
+            return profileFailure(c, removed.error());
+        }
+        LocalWifi.bumpRevision(c);
+        profileChanged(c, DiagReasons.ProfileChange.REMOVED, removed.profile());
+        return "removed=" + cleanId
+                + ", ssid=" + removed.profile().ssid()
+                + ", reload=" + reloadTarget();
+    }
+
+    /**
+     * Moves a profile to a 1-based position in the try order. A position
+     * outside the list is refused with the current range, so a typo does not
+     * silently do nothing.
+     */
+    public static String setPriority(Context c, String id, String priorityText) {
+        String cleanId = id == null ? "" : id.trim();
+        List<Profile> before = Profiles.list(c);
+        int from = priorityOf(before, cleanId);
+        if (cleanId.isEmpty() || from < 0) {
+            return fail(c, DiagReasons.Failure.PROFILE_UNKNOWN,
+                    DiagReasons.profileDetail(ProfileTable.ERROR_UNKNOWN));
+        }
+        Integer priority = ControlText.priority(priorityText);
+        if (priority == null || priority < 1 || priority > before.size()) {
+            return fail(c, DiagReasons.Failure.PROFILE_PRIORITY,
+                    "priority must be between 1 and " + before.size()
+                            + "; fix: run ./keeper.sh profiles to see the order");
+        }
+        ProfileTable.Outcome moved = Profiles.move(c, cleanId, priority);
+        if (!moved.ok()) {
+            return profileFailure(c, moved.error());
+        }
+        if (from != priority.intValue()) {
+            LocalWifi.bumpRevision(c);
+            profileChanged(c, DiagReasons.ProfileChange.UPDATED, moved.profile());
+        }
+        return "id=" + moved.profile().id()
+                + ", priority=" + priority
                 + ", reload=" + reloadTarget();
     }
 
@@ -194,6 +301,9 @@ public final class Keeper {
         m.put("termux", PinnedPort.termuxUsable(c) ? "usable"
                 : PinnedPort.hasTermux(c) ? "no RUN_COMMAND grant" : "not installed");
         m.put("ssid", LocalWifi.ssid(c).isEmpty() ? "(none)" : LocalWifi.ssid(c));
+        List<Profile> profiles = Profiles.list(c);
+        m.put("profiles", String.valueOf(profiles.size()));
+        m.put("profile_active", profiles.isEmpty() ? "(none)" : profiles.get(0).id());
         m.put("sdk", String.valueOf(Build.VERSION.SDK_INT));
         return m;
     }
@@ -226,5 +336,27 @@ public final class Keeper {
     private static String fail(Context c, DiagReasons.Failure failure, String detail) {
         return DiagReasons.fail(
                 (level, code, reason) -> Diag.event(c, level, code, reason), failure, detail);
+    }
+
+    /** One coded journal event for a store refusal, with the same sentence. */
+    private static String profileFailure(Context c, String error) {
+        return fail(c, DiagReasons.profileFailure(error), DiagReasons.profileDetail(error));
+    }
+
+    /** Exactly one event per profile change; the detail never carries the secret. */
+    private static void profileChanged(Context c, DiagReasons.ProfileChange change,
+                                       Profile profile) {
+        DiagReasons.changed(
+                (level, code, reason) -> Diag.event(c, level, code, reason), change,
+                "id=" + ControlText.oneLine(profile.id())
+                        + " ssid=" + ControlText.oneLine(profile.ssid()));
+    }
+
+    /** The 1-based try position of an id, or -1 when it is not in the list. */
+    private static int priorityOf(List<Profile> profiles, String id) {
+        for (int i = 0; i < profiles.size(); i++) {
+            if (profiles.get(i).id().equals(id)) return i + 1;
+        }
+        return -1;
     }
 }
