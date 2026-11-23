@@ -6,14 +6,20 @@
 # `svc wifi enable`, and Termux holds the adb client whose key this phone has
 # already paired. So the app asks Termux to run this script.
 #
-# Loopback is deliberate: it keeps working while the radio is off, as long as
-# adbd is listening, which pin-adb-port.sh keeps true.
+# The pinned port is tried first, because the app keeps adbd there even when the
+# radio is off. If it is not pinned (or the connect fails), any serial that adb
+# already holds will do.
 set -u
 
-serial=$(adb devices 2>/dev/null | awk 'NR > 1 && $2 == "device" { print $1; exit }')
+PIN_PORT=${ADB_PIN_PORT:-5555}
+
+# Connecting to loopback keeps working with the radio off, as long as adbd is
+# listening, which pin-adb-port.sh keeps true.
+adb connect "127.0.0.1:$PIN_PORT" >/dev/null 2>&1 || true
+sleep 1
+serial=$(adb devices 2>/dev/null | awk -v a="127.0.0.1:$PIN_PORT" '$1 == a && $2 == "device" { print $1; exit }')
+
 if [ -z "${serial:-}" ]; then
-    adb connect 127.0.0.1:5555 >/dev/null 2>&1 || true
-    sleep 1
     serial=$(adb devices 2>/dev/null | awk 'NR > 1 && $2 == "device" { print $1; exit }')
 fi
 if [ -z "${serial:-}" ]; then

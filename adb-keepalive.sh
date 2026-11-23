@@ -7,22 +7,26 @@
 # has no permission to run the adb client or read adbd's port.
 #
 # Port discovery, cheapest first:
+#   0. the port the app pinned adbd to (ADB_PIN_PORT, 5555)
 #   1. the port used last time (survives a plain Wi-Fi reconnect)
 #   2. mDNS: adbd advertises _adb-tls-connect._tcp itself (adb-mdns.py)
-#   3. a TCP scan of 30000-50000, only if mDNS stays silent
+#   3. the phone's TCP table if a serial is attached, otherwise a TCP scan of
+#      the kernel's ephemeral range (PORT_START/PORT_END override the range;
+#      the default is 32768-60999)
 #
 # Usage:  ./adb-keepalive.sh            run in foreground (Ctrl-C to stop)
 #         ./adb-keepalive.sh &          run in background
 # Log:    adb-keepalive.log
 
 set -u
-cd "$(dirname "$0")" || exit 1
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || exit 1
+cd "$SCRIPT_DIR" || exit 1
+# shellcheck source=discover.sh
+. "$SCRIPT_DIR/discover.sh" || exit 1
 
 LOG="adb-keepalive.log"
-PORT_START=${PORT_START:-30000}
-PORT_END=${PORT_END:-50000}
 MDNS=0
-python3 -c 'import zeroconf' >/dev/null 2>&1 && [ -x ./adb-mdns.py ] && MDNS=1
+discover_mdns_available && MDNS=1
 
 log() {
     echo "$(date '+%H:%M:%S') $*" | tee -a "$LOG"
@@ -47,41 +51,19 @@ if [ -f "$PIDFILE" ]; then
     fi
 fi
 echo $$ > "$PIDFILE"
-trap 'rm -f "$PIDFILE"' EXIT
+
+# A wake lock left held after the watchdog is gone keeps the phone awake for
+# nothing. Every normal exit path (Ctrl-C, TERM from a boot script) runs this;
+# only SIGKILL cannot be caught.
+LOCKED=0
+cleanup() {
+    rm -f "$PIDFILE"
+    if [ "$LOCKED" = "1" ]; then
+        termux-wake-unlock >/dev/null 2>&1
+    fi
+}
+trap cleanup EXIT
 trap 'exit 0' INT TERM
-
-scan() {
-    python3 - "$PORT_START" "$PORT_END" <<'PY'
-import asyncio, sys
-
-start, end = int(sys.argv[1]), int(sys.argv[2])
-
-async def check(port, sem):
-    async with sem:
-        try:
-            _, w = await asyncio.wait_for(
-                asyncio.open_connection("127.0.0.1", port), timeout=0.3)
-            w.close()
-            return port
-        except Exception:
-            return None
-
-async def main():
-    sem = asyncio.Semaphore(400)
-    found = []
-    for chunk in range(start, end + 1, 5000):
-        results = await asyncio.gather(
-            *(check(p, sem) for p in range(chunk, min(chunk + 5000, end + 1))))
-        found += [p for p in results if p]
-    print(" ".join(str(p) for p in sorted(found)))
-
-asyncio.run(main())
-PY
-}
-
-state_of() {
-    adb devices | awk -v a="127.0.0.1:$1" '$1==a{print $2}'
-}
 
 # Shizuku runs a process as the shell user so apps can use adb-level APIs. Its
 # server dies with the phone, and it is started by an adb command, so restart it
@@ -125,7 +107,7 @@ BAD=""
 # The keeper app pins adbd to 5555 when it can (pin-adb-port.sh). Prefer that
 # port, so this loop re-attaches there instead of hunting for a TLS port that no
 # longer exists. soft=1: a closed 5555 must stay a candidate for later rounds.
-PINNED_PORT=${ADB_PIN_PORT:-5555}
+PINNED_PORT=$ADB_PIN_PORT
 
 # try_port <port> [soft]
 #   soft=1: authoritative candidate (mDNS), never remembered as bad.
@@ -135,19 +117,20 @@ try_port() {
     if [ "$soft" = "0" ]; then
         case " $BAD " in *" $port "*) return 1 ;; esac
     fi
-    timeout 5 adb connect "127.0.0.1:$port" >/dev/null 2>&1
-    for _ in 1 2 3; do
-        case "$(state_of "$port")" in
-            device) return 0 ;;
-        esac
-        sleep 1
-    done
-    adb disconnect "127.0.0.1:$port" >/dev/null 2>&1
+    if discover_connect "$port" 3; then
+        return 0
+    fi
     [ "$soft" = "0" ] && BAD="$BAD $port"
     return 1
 }
 
-command -v termux-wake-lock >/dev/null 2>&1 && termux-wake-lock >/dev/null 2>&1
+# Only take the lock if the Termux API command exists; LOCKED then gates the
+# matching unlock in cleanup().
+if command -v termux-wake-lock >/dev/null 2>&1; then
+    if termux-wake-lock >/dev/null 2>&1; then
+        LOCKED=1
+    fi
+fi
 log "watching for wireless debugging (ports $PORT_START-$PORT_END, mdns=$MDNS)"
 
 last=""
@@ -206,7 +189,7 @@ while true; do
     # 2. mDNS: the advertisement carries the new port directly.
     if [ "$MDNS" = "1" ]; then
         started=$(date +%s)
-        ports=$(./adb-mdns.py 3 2>/dev/null)
+        ports=$(discover_mdns 3)
         took=$(( $(date +%s) - started ))
         if [ -n "$ports" ]; then
             mdns_misses=0
@@ -225,15 +208,16 @@ while true; do
         fi
     fi
 
-    # 3. Last resort: TCP scan. With mDNS available, give the advertisement a
-    #    couple of rounds before paying for it.
+    # 3. Last resort: the shared discovery helper. It reads the phone's TCP
+    #    table when a serial is attached and scans the range otherwise. With
+    #    mDNS available, give the advertisement a couple of rounds first.
     if [ "$MDNS" = "1" ] && [ "$mdns_misses" -lt 2 ]; then
         sleep 2
         continue
     fi
 
     started=$(date +%s)
-    ports=$(scan)
+    ports=$(discover_ports)
     took=$(( $(date +%s) - started ))
     for p in $ports; do
         [ "$p" = "5037" ] && continue

@@ -14,12 +14,13 @@
 # Exit:   0 pinned, 1 nothing to attach to (wireless debugging off / no adbd)
 
 set -u
-cd "$(dirname "$0")" || exit 1
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || exit 1
+cd "$SCRIPT_DIR" || exit 1
+# shellcheck source=discover.sh
+. "$SCRIPT_DIR/discover.sh" || exit 1
 
-PORT=${ADB_PIN_PORT:-5555}
+PORT=$ADB_PIN_PORT
 LOG="pin-adb-port.log"
-PORT_START=${PORT_START:-32768}
-PORT_END=${PORT_END:-60999}
 
 log() {
     echo "$(date '+%H:%M:%S') $*" >> "$LOG"
@@ -60,58 +61,13 @@ adb devices 2>/dev/null | awk '$2=="offline"{print $1}' | while read -r s; do
     adb disconnect "$s" >/dev/null 2>&1
 done
 
-mdns_ports() {
-    [ -x ./adb-mdns.py ] && ./adb-mdns.py 3 2>/dev/null
-}
-
-# Last resort: adbd's TLS port is a listening socket in the ephemeral range.
-scan() {
-    python3 - "$PORT_START" "$PORT_END" <<'PY'
-import asyncio, sys
-
-start, end = int(sys.argv[1]), int(sys.argv[2])
-
-async def check(port, sem):
-    async with sem:
-        try:
-            _, w = await asyncio.wait_for(
-                asyncio.open_connection("127.0.0.1", port), timeout=0.25)
-            w.close()
-            return port
-        except Exception:
-            return None
-
-async def main():
-    sem = asyncio.Semaphore(400)
-    found = []
-    for chunk in range(start, end + 1, 5000):
-        results = await asyncio.gather(
-            *(check(p, sem) for p in range(chunk, min(chunk + 5000, end + 1))))
-        found += [p for p in results if p]
-    print(" ".join(str(p) for p in sorted(found)))
-
-asyncio.run(main())
-PY
-}
-
-connect_on() {
-    local port="$1"
-    timeout 5 adb connect "127.0.0.1:$port" >/dev/null 2>&1
-    for _ in 1 2 3 4 5; do
-        [ "$(state_of "$port")" = device ] && return 0
-        sleep 1
-    done
-    adb disconnect "127.0.0.1:$port" >/dev/null 2>&1
-    return 1
-}
-
 # try_tcpip <port>: attach to adbd there and ask it to listen on $PORT instead.
 # Returns 0 once adbd said yes (the old serial goes offline; that is expected).
 try_tcpip() {
     local port="$1"
     [ "$port" = "$PORT" ] && return 1
     [ "$port" = "5037" ] && return 1
-    connect_on "$port" || return 1
+    discover_connect "$port" 5 || return 1
     log "attached to adbd on $port"
     if ! timeout 10 adb -s "127.0.0.1:$port" tcpip "$PORT" >/dev/null 2>&1; then
         log "tcpip $PORT refused on $port"
@@ -124,19 +80,20 @@ try_tcpip() {
 
 # 1. A serial the keepalive already holds (cheapest, usually the TLS port).
 # 2. The port adbd advertises over mDNS.
-# 3. A scan, when mDNS is unavailable or silent.
+# 3. The shared discovery helper: the phone's TCP table when a serial is
+#    attached (one round trip), otherwise a scan of the shared range.
 found=""
 for port in $(adb devices 2>/dev/null | awk '$2=="device"{print $1}' | awk -F: 'NF>1{print $NF}'); do
     if try_tcpip "$port"; then found=1; break; fi
 done
 if [ -z "$found" ]; then
-    for port in $(mdns_ports); do
+    for port in $(discover_mdns 3); do
         if try_tcpip "$port"; then found=1; break; fi
     done
 fi
 if [ -z "$found" ]; then
-    log "scanning $PORT_START-$PORT_END for adbd"
-    for port in $(scan); do
+    log "discovering adbd in $PORT_START-$PORT_END"
+    for port in $(discover_ports); do
         if try_tcpip "$port"; then found=1; break; fi
     done
 fi

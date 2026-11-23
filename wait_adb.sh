@@ -1,46 +1,48 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # Wait for adbd to appear and connect. Used after Wi-Fi was disconnected.
+#
+# The pinned port is tried first, so a phone the app has pinned to 5555
+# reconnects without a scan. Then the port mDNS advertises, then the shared
+# discovery helper (the phone's TCP table if a serial is attached, otherwise a
+# loopback scan). PORT_START/PORT_END and ADB_PIN_PORT override the defaults.
 set -u
-cd "$(dirname "$0")"
-
-scan() {
-    python3 - <<'PY'
-import asyncio
-async def check(p, sem):
-    async with sem:
-        try:
-            _, w = await asyncio.wait_for(asyncio.open_connection("127.0.0.1", p), timeout=0.2)
-            w.close(); return p
-        except Exception: return None
-async def main():
-    sem = asyncio.Semaphore(700)
-    out = []
-    for start in range(30000, 50001, 5000):
-        r = await asyncio.gather(*(check(p, sem) for p in range(start, min(start + 5000, 50001))))
-        out += [x for x in r if x]
-    print(" ".join(str(x) for x in sorted(out)))
-asyncio.run(main())
-PY
-}
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || exit 1
+cd "$SCRIPT_DIR" || exit 1
+# shellcheck source=discover.sh
+. "$SCRIPT_DIR/discover.sh" || exit 1
 
 for round in $(seq 1 40); do
     adb kill-server >/dev/null 2>&1
     adb start-server >/dev/null 2>&1
-    ports=$(scan)
-    for p in $ports; do
-        [ "$p" = "5037" ] && continue
-        timeout 5 adb connect "127.0.0.1:$p" >/dev/null 2>&1
-        for _ in 1 2 3 4; do
-            state=$(adb devices | awk -v a="127.0.0.1:$p" '$1==a{print $2}')
-            if [ "$state" = "device" ]; then
-                echo "CONNECTED 127.0.0.1:$p"
-                adb devices -l
-                exit 0
+
+    connected=""
+    if discover_connect "$ADB_PIN_PORT" 4; then
+        connected="$ADB_PIN_PORT"
+    fi
+    if [ -z "$connected" ]; then
+        for port in $(discover_mdns 3); do
+            [ "$port" = "$ADB_PIN_PORT" ] && continue
+            if discover_connect "$port" 4; then
+                connected="$port"
+                break
             fi
-            sleep 1
         done
-        adb disconnect "127.0.0.1:$p" >/dev/null 2>&1
-    done
+    fi
+    if [ -z "$connected" ]; then
+        for port in $(discover_ports); do
+            [ "$port" = "$ADB_PIN_PORT" ] && continue
+            if discover_connect "$port" 4; then
+                connected="$port"
+                break
+            fi
+        done
+    fi
+
+    if [ -n "$connected" ]; then
+        echo "CONNECTED 127.0.0.1:$connected"
+        adb devices -l
+        exit 0
+    fi
     echo "round $round: no adbd yet"
     sleep 12
 done
