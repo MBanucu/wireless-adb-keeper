@@ -36,7 +36,15 @@ public final class PinnedPort {
     /** Asked again only after this long, so a stuck adbd is not hammered. */
     private static final long MIN_INTERVAL_MS = 30_000L;
 
-    private static volatile long lastAsk = 0L;
+    /**
+     * Guards {@link #lastAsk} and {@link #state}. Never held across a socket
+     * probe or a Termux intent: the lock only claims the interval after the
+     * probe has already shown the port closed.
+     */
+    private static final Object LOCK = new Object();
+
+    private static long lastAsk = 0L;
+    /** Volatile so {@link #state()} reads it without taking the lock. */
     private static volatile String state = "not checked";
 
     private PinnedPort() {}
@@ -92,29 +100,40 @@ public final class PinnedPort {
 
     private static String check(Context c, boolean force) {
         if (isListening()) {
-            state = "listening on " + PORT;
-            return state;
+            return setState("listening on " + PORT);
         }
         if (!hasTermux(c)) {
-            state = "closed (Termux not installed)";
-            return state;
+            return setState("closed (Termux not installed)");
         }
         if (!termuxUsable(c)) {
-            state = "closed (grant " + TERMUX_PERM + ")";
+            return setState("closed (grant " + TERMUX_PERM + ")");
+        }
+        synchronized (LOCK) {
+            long now = SystemClock.elapsedRealtime();
+            if (!force && now - lastAsk < MIN_INTERVAL_MS) {
+                state = "closed (asked Termux, waiting)";
+                return state;
+            }
+            // Claim the interval before the intent leaves the process. A second
+            // caller that also found the port closed now sees a fresh lastAsk
+            // and does not ask Termux inside the same window. The intent is
+            // sent below, outside this lock.
+            lastAsk = now;
+        }
+        // The ask itself is network/unbounded work; a failure still settles the
+        // window so a refused background start is not retried in a tight loop.
+        boolean asked = askTermux(c);
+        synchronized (LOCK) {
+            state = asked ? "closed (asked Termux)" : "closed (could not reach Termux)";
             return state;
         }
-        long now = SystemClock.elapsedRealtime();
-        if (!force && now - lastAsk < MIN_INTERVAL_MS) {
-            state = "closed (asked Termux, waiting)";
-            return state;
+    }
+
+    private static String setState(String value) {
+        synchronized (LOCK) {
+            state = value;
+            return value;
         }
-        lastAsk = now;
-        if (askTermux(c)) {
-            state = "closed (asked Termux)";
-        } else {
-            state = "closed (could not reach Termux)";
-        }
-        return state;
     }
 
     private static boolean askTermux(Context c) {
