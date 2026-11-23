@@ -1,6 +1,7 @@
 # build output and signing material
 build/
 build-gradle/
+tests/out/
 *.apk
 *.idsig
 debug.keystore

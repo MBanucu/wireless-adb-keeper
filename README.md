@@ -161,11 +161,13 @@ will not update an installed `build.sh` build.
 
 ### Probes and CI
 
-`tools/` holds host-side diagnostics. Gradle compiles them against the
+`tests/unit/` holds the JVM suites (see [`tests/README.md`](tests/README.md)) and
+`tools/` holds host-side diagnostics. Gradle compiles the probes against the
 app's `android.jar`, so neither needs a hand-written `javac` line:
 
 ```bash
-./gradlew probe       # IdentityProbe, TokenProbe, ResultProbe and the scripts' RESULT contract
+./gradlew probeUnit   # the tests/unit suites, no device, no JUnit
+./gradlew probe       # probeUnit plus IdentityProbe, TokenProbe, ResultProbe and the scripts
 ./gradlew probeResult # TermuxResult: the RESULT-line parser, no device
 ./gradlew probeScripts # pin-adb-port.sh, wait_adb.sh, wifi-on.sh with a fake adb
 ./gradlew probeAdb    # AdbProbe: needs a phone with adbd on 127.0.0.1:5555
@@ -176,7 +178,8 @@ app's `android.jar`, so neither needs a hand-written `javac` line:
 `probe` runs only what can run without a phone; `test` and `check` depend on it.
 `probeAdb` stays manual and is never part of CI. There is deliberately no JUnit
 dependency: it does not resolve from the offline Gradle cache this project builds
-from on the phone, so the probe stands in for the unit tests.
+from on the phone, so `tests/unit.sh` runs the suites itself and reports
+`PASS`/`FAIL` with a non-zero exit code.
 
 `.github/workflows/build.yml` runs `./gradlew test lint assembleDebug` on every
 push and pull request, on JDK 17 with the Android SDK. It needs no device, and it
