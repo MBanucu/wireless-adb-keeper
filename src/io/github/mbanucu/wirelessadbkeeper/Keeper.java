@@ -7,6 +7,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
 
+import java.io.File;
+import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -108,6 +110,24 @@ public final class Keeper {
     /** Sends `adb tcpip 5555` through Termux right now. */
     public static String pinPort(Context c) {
         return "pinned_port=" + PinnedPort.force(c);
+    }
+
+    /**
+     * The app's ADB public key and where it is kept.
+     *
+     * This is the side of pairing that has to exist before the pairing client
+     * does: the key is generated once, in device-protected storage, and its
+     * public half is what a pairing code would authorise in adb_keys.
+     */
+    public static String pubkey(Context c) {
+        try {
+            AdbKey key = AdbIdentity.load(c);
+            return "pubkey=" + key.publicKeyBase64()
+                    + "\nname=" + AdbIdentity.KEY_NAME
+                    + "\npath=" + new File(AdbIdentity.dir(c), AdbIdentity.KEY_FILE);
+        } catch (IOException e) {
+            return "error=" + e.getMessage();
+        }
     }
 
     /** Registers the 15-minute JobScheduler fallback. */

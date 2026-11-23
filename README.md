@@ -170,6 +170,7 @@ force-stopped or only just installed, which a broadcast cannot do.
 ./keeper.sh mode auto|local   # Connect mode
 ./keeper.sh save SSID [PASS]  # Save SSID and password
 ./keeper.sh pin               # Pin adb port 5555 now
+./keeper.sh pubkey            # the app's own ADB public key
 ./keeper.sh schedule          # 15-minute keep-alive job
 ```
 

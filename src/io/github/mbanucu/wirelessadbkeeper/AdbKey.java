@@ -43,7 +43,11 @@ public final class AdbKey {
     /** Reads an unencrypted PKCS#8 PEM block. */
     public static AdbKey fromPkcs8Pem(String pem) {
         String body = pem.replaceAll("-----(BEGIN|END) [A-Z ]+-----", "").replaceAll("\\s", "");
-        byte[] der = Base64.getDecoder().decode(body);
+        return fromPkcs8(Base64.getDecoder().decode(body));
+    }
+
+    /** Reads the DER of an unencrypted PKCS#8 private key. */
+    public static AdbKey fromPkcs8(byte[] der) {
         try {
             PrivateKey key = KeyFactory.getInstance("RSA")
                     .generatePrivate(new PKCS8EncodedKeySpec(der));

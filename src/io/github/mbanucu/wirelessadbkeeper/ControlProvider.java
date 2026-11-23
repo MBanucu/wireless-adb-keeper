@@ -49,7 +49,7 @@ public class ControlProvider extends ContentProvider {
             return reply(403, "error=refused: only adb shell, root or system may control the app");
         }
         if (method == null) {
-            return reply(400, "error=missing method; use status, enable, wifi_on, ...");
+            return reply(400, "error=missing method; use status, enable, wifi_on, pubkey, ...");
         }
 
         Bundle in = extras == null ? Bundle.EMPTY : extras;
@@ -101,6 +101,9 @@ public class ControlProvider extends ContentProvider {
         }
         if ("pin_port".equals(method)) {
             return Keeper.pinPort(c);
+        }
+        if ("pubkey".equals(method)) {
+            return Keeper.pubkey(c);
         }
         if ("schedule".equals(method)) {
             return Keeper.schedule(c);

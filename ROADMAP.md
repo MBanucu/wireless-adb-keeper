@@ -12,8 +12,10 @@ Guiding constraints, in priority order:
 2. **No taps to operate.** Runtime behaviour stays automatic: monitor, re-enable,
    re-pin, Wi-Fi on. A *one-time* bootstrap tap is acceptable (see M2) — it is setup,
    not operation.
-3. **Don't regress the current build.** `build.sh` must keep producing a working APK;
-   dependencies are allowed only on the Gradle path until decided otherwise.
+3. **Two builds, deliberately.** `build.sh` stays the no-dependency build and keeps
+   producing the Termux-backed APK; Gradle is the only build that can carry a
+   dependency, so the Termux-free build lives there. Neither may silently become the
+   other, and the README has to say which artifact is which.
 4. **Termux stays as fallback until its replacement is measured, not assumed.**
 
 ## What actually has to be replaced
@@ -69,25 +71,37 @@ Two protocol details were established the hard way and are documented on #3: the
 `AUTH` signature carries the token *as* the PKCS#1 digest (not `SHA1withRSA`), and
 streams must be filtered by id because adbd can send a late duplicate `CLSE`.
 
-*Scope:* `AdbClient`, `AdbKey`, `tools/AdbProbe`; `PinnedPort` and `WifiRadio` untouched.
+*Scope:* `AdbClient`, `AdbKey`, `tools/AdbProbe` (including a `--tcpip` smoke test that
+re-pins 5555 and times it); `PinnedPort` and `WifiRadio` untouched.
 
 *Done when:* the probe authenticates and prints `id`, `getprop` and `echo` correctly in
 sequence, its encoded public key matches `.android/adbkey.pub` byte for byte, and both
 builds still pass. **Met.**
 
 *Risk:* protocol handshake details (checksum, `AUTH` signature padding, shell v2 vs
-legacy shell). Keep the transport in one class so M3 can wrap it in TLS unchanged.
+legacy shell). Note for M3: adb's TLS is an `STLS` upgrade of the same socket, not a
+TLS socket handed in at construction, so the "wrap it unchanged" idea was wrong — the
+transport needs stream injection, or libadb takes that path (see M3).
 
 ### M2 — App key, stored once, trusted once — **decision gate** · [#4](https://github.com/MBanucu/wireless-adb-keeper/issues/4)
 
-Two separable pieces:
+**Status:** key storage is done and verified on the phone — `AdbIdentity` keeps the key at
+`/data/user_de/0/<pkg>/files/adb-identity/adbkey.pk8` (0600), reported by `keeper.sh pubkey`.
+Pairing itself is not started; the gate is decided below. Reading the key across a reboot
+before unlock is still unproven.
 
-**Key storage.** Generate an RSA keypair into app storage, export the ADB public key
+Three pieces:
+
+**Key storage (done).** Generate an RSA keypair into app storage, export the ADB public key
 in `adb`'s `name=... base64` form, and sign auth tokens with it. Store it in
 **device-protected storage**, because the boot path needs it before the first unlock
 (`PinnedPort` runs at `LOCKED_BOOT_COMPLETED`) and credential-encrypted storage is
 unreadable there. Not AndroidKeyStore: ADB auth needs the raw key and its own
 signature padding.
+
+**Certificate.** Pairing takes an X.509 `Certificate`, not just a key, so build a
+self-signed one for the ADB key (BouncyCastle, already transitive through libadb, or DER
+by hand) and keep it beside the key in the same protected directory.
 
 **Trust bootstrap.** Implement wireless-debugging pairing:
 `_adb-tls-pairing._tcp` discovery, `pairing:...` service, SPAKE2, the 6-digit code.
@@ -98,19 +112,31 @@ Decision gate — pick one, on measured evidence, before writing the pairing cod
 | Option | Why | Why not |
 | --- | --- | --- |
 | Extend the M1 client with pairing | no dependency, stays Java/`build.sh`-friendly, full control | SPAKE2 + adbd's TLS cert exchange is a lot of subtle crypto to own |
-| **libadb-android** (3.1.1) | pure Java, pairing, arbitrary services, Apache-2.0 OR GPL-3.0, deployed widely via App Manager | jars + native `.so` for 4 ABIs, APK 886K → 4.4M, single maintainer |
+| **libadb-android** (3.1.1) — **picked** | pure Java, public `PairingConnectionCtx` + `AdbConnection.create`, builds at `compileSdk 35`, Apache-2.0 OR GPL-3.0, deployed widely via App Manager | jars + native `.so` for 4 ABIs, APK 886K → 4.4M, single maintainer |
 | **Kadb** (2.1.5) | best-documented pairing/TLS/mDNS surface, `open()` raw services, Apache-2.0, active | Kotlin, `minCompileSdk=37` (forces compileSdk 37), BouncyCastle's `META-INF/LICENSE*` needs a packaging exclude, ~3.5MB |
 | Dadb, adblib, adb-kt | small | no pairing / unmaintained |
 
-Recommendation to re-check at the gate: **Kadb, used narrowly** — pairing, TLS
-client and mDNS are exactly the three things we would otherwise write ourselves, and
-they are the three things worth not writing ourselves. Its size is the price of the
-feature, not of `tcpip`. It also forces the compileSdk 37 bump here, which is a
-one-line change plus an SDK install.
+**Decision at the gate: libadb-android, used narrowly.** Kadb read better here when
+this was written, on the assumption that `compileSdk 37` was a one-line change. It is
+not: the SDK on this phone has platforms 34 and 35 only, `sdkmanager` is not on `PATH`,
+and Kadb also needs the Kotlin plugin. libadb-android builds at the current 35 and its
+pairing surface is public — `new PairingConnectionCtx(host, port, code, privateKey,
+certificate, "pairing")` then `AdbConnection.create(host, port, key, cert)` — so it is
+the pick. Kadb stays the fallback if libadb's pairing is refused by this vendor build.
 
-*Done when:* on a fresh install, the app shows/passes the pairing code, pairs to
-localhost, and `adb_keys` (checked from a shell) now contains the app's key; the
-key survives a reboot and is readable before unlock.
+The certificate piece above is what the first draft missed, and it is why M2 is not
+just "add a dependency": the build gains a cert path and the app gains a second stored
+artifact.
+
+*Done when:* on a fresh install the app pairs to loopback with the code from Developer
+options, and afterwards opens a service over that connection with no Termux involvement;
+after a reboot the pinned port is back before the first unlock. Success is the working
+connection, not the key file: the earlier wording, "`adb_keys` contains the app's key",
+is untestable — `/data/misc/adb/adb_keys` is unreadable from the shell uid and the app is
+not debuggable, so `run-as` cannot reach it either.
+
+*Still unproven:* reading the key across a reboot before unlock. The `user_de` path
+proves the mechanism; no reboot test has run yet.
 
 *Risk:* this is the milestone that can fail. If pairing against the phone's own
 adbd turns out to be refused by the vendor build, the fallback is explicit and
@@ -120,15 +146,24 @@ documented: keep Termux, close the issue as "not feasible unrooted".
 
 With a trusted key, the app can now do what the scripts did:
 
-- TLS client to adbd's wireless-debugging port (`CNXN`, `STLS`, adbd's cert
-  exchange), reusing the M1 transport behind a socket-agnostic layer.
+- TLS client to adbd's wireless-debugging port (`CNXN`, `STLS`, adbd's client cert).
+  This is **not** a wrapper around M1's transport: adb upgrades the existing socket with
+  `STLS`, so either `AdbClient` grows stream injection or it stays the plain-5555 client
+  and libadb owns TLS. Working position: libadb owns TLS and pairing, `AdbClient` keeps
+  the plain-5555 path used for re-pin checks and `svc wifi enable`; collapse the two only
+  if M3 shows one covers both.
 - Port discovery without Termux: `NsdManager` for `_adb-tls-connect._tcp`, verify the
   port still accepts a connection before trusting it (the stale-advertisement problem
   `adb-mdns.py` already documents), then fall back to the same 30000–50000 scan.
 - `PinnedPort` calls the in-app client to send `tcpip:5555`, keeping its current
   scheduling, quiet window and "probe before asking" logic.
 - Re-pin after reboot against the new TLS port, which is the actual reason the
-  property cannot simply persist.
+  property cannot simply persist. Two mechanics measured with `AdbProbe --tcpip`:
+  the `tcpip` request tears down the transport that sent it (adbd restarts), and the
+  wireless-debugging TLS port changes with it, so the pin path must survive its own
+  connection dying and rediscover the port before the next use. Re-pin itself is fast —
+  200 ms and 177 ms across two runs, 3 poll attempts each — so the ≤30 s and ≈60 s
+  targets below are bound by how often the app looks, not by the client.
 - `WifiRadio` switches to `shell:svc wifi enable` over the now-trusted key, with the
   Termux path kept as fallback until M4 removes it. (Moved here from M1: the app cannot
   authenticate before M2.)
@@ -145,6 +180,9 @@ reachable in ≤ 30 s; reboot untouched and get 5555 reachable within the curren
   them in the repo for the Android ≤10 path if that path is kept).
 - Update `README.md`: components table, requirements, limitations, and the
   security note that `tcpip` mode is still unencrypted RSA auth on 5555.
+- Settle the build split from constraint 3: the Termux-free APK is the Gradle artifact, so
+  either `build.sh` ships the Termux-backed fallback with a README that says so, or it is
+  retired for the dependency-carrying feature set.
 
 *Done when:* a device with no Termux installed, no scripts, and no `RUN_COMMAND`
 grant keeps wireless debugging on, re-pins 5555, and turns the radio on.
@@ -171,9 +209,14 @@ close #1 with the measured numbers.
   fails on reboot", the exact case that matters.
 - **Vendor divergence.** DokeOS already needed `directBootAware` written on the
   receiver; assume the TLS/pairing path needs per-version testing (11/12/13/15).
-- **Library coupling.** Kadb requires `compileSdk 37`; libadb-android drags in
-  native libs and 4× the APK. Whichever wins, pin the version and record why in
+- **Library coupling.** libadb-android is the pick: 886K → 4.4M APK, jars plus native
+  libs for four ABIs, single maintainer, Apache-2.0 OR GPL-3.0. Kadb (needs
+  `compileSdk 37` plus Kotlin) is the fallback. Pin the version and record the reason in
   `build.gradle.kts`.
+- **Two clients drift.** libadb for TLS/pairing and `AdbClient` for plain 5555 means two
+  transports and two auth paths in one app. Keep the split explicit in the code and give
+  the log line a way to say which one did the work, or debugging a pin failure gets
+  ambiguous.
 - **Background execution.** Pinning now happens in-process: a killed service means
   no re-pin, where Termux's keepalive used to survive. The existing job/boot
   fallbacks need to cover this, and the log needs to say when they did not.
@@ -185,4 +228,6 @@ uninstalled: cold boot → 5555 reachable; `adb usb` → 5555 back within a minu
 Wi-Fi off → radio back on; airplane mode → recovery; 24 h soak with the log checked
 for repeated adbd restarts (the write/notify loop `Ensurer` guards against).
 Report timings against the current baseline (≤30 s, ≈60 s after boot) rather than
-"works".
+"works". `tools/AdbProbe --tcpip` is the reference measurement for a re-pin made by an
+app-owned client (200/177 ms), and `keeper.sh status` is the cheap health check after
+each run — note that a `tcpip` run costs one adb server transport drop (~5 s to reclaim).
