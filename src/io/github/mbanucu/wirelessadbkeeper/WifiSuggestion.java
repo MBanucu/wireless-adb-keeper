@@ -77,16 +77,25 @@ public final class WifiSuggestion {
         return outcome;
     }
 
-    /** Removes exactly this profile's suggestion and its applied record. */
+    /**
+     * Removes exactly this profile's suggestion and its applied record. True
+     * also when there was nothing to remove; false only when the platform call
+     * failed and the record was kept for a retry.
+     */
     public static boolean removeOne(Context c, String id) {
         migrateLegacyPrefs(c);
         WifiManager wm = manager(c);
-        if (wm == null) return false;
+        if (wm == null) return true;
         List<Profile> profiles = Profiles.list(c);
         int removed = new SuggestionRegistry(secrets(c), new AndroidManager(c, wm))
                 .removeOne(profiles, id);
+        if (removed == SuggestionRegistry.STATUS_REQUEST_FAILED) {
+            Diag.warn(c, "wifi.suggest.refused", id
+                    + ": could not remove the suggestion; its record was kept for a retry");
+            return false;
+        }
         Log.i(Ensurer.TAG, "wifi suggestion removed for " + id + ": " + removed);
-        return removed > 0;
+        return true;
     }
 
     /** Removes every profile's suggestion, for a switch away from auto-connect. */
@@ -270,7 +279,7 @@ public final class WifiSuggestion {
                 return 1;
             } catch (Exception e) {
                 Log.w(Ensurer.TAG, "wifi suggestion: remove failed for " + id + ": " + e);
-                return 0;
+                return SuggestionRegistry.STATUS_REQUEST_FAILED;
             }
         }
 

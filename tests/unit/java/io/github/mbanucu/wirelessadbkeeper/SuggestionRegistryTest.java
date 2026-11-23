@@ -34,6 +34,7 @@ public final class SuggestionRegistryTest {
         aProfileWithoutAPasswordIsSkippedById();
         anOpenProfileRegistersWithoutASecret();
         deleteRemovesExactlyItsRecord();
+        aFailedRemovalKeepsTheRecordForARetry();
         aRejectionStopsTheRemainingProfiles();
         theSingleSlotMigratesWithoutReregistering();
         theStatusDetailNeverCarriesAPassphrase();
@@ -182,6 +183,34 @@ public final class SuggestionRegistryTest {
                 manager.held.containsKey("p1"));
     }
 
+    private static void aFailedRemovalKeepsTheRecordForARetry() {
+        MapSecrets secrets = new MapSecrets();
+        seedThree(secrets);
+        FakeManager manager = new FakeManager();
+        SuggestionRegistry registry = new SuggestionRegistry(secrets, manager);
+        registry.addAll(three());
+        String record = secrets.slots.get(ProfileTable.appliedSlot("p1"));
+        manager.failRemove = true;
+
+        int failed = registry.removeOne(three(), "p1");
+
+        check("a failed removal reports the request failure",
+                SuggestionRegistry.STATUS_REQUEST_FAILED, failed);
+        check("a failed removal keeps the applied record for a retry",
+                record, secrets.slots.get(ProfileTable.appliedSlot("p1")));
+        check("a failed removal keeps the platform suggestion", true,
+                manager.held.containsKey("p1"));
+
+        manager.failRemove = false;
+        int retried = registry.removeOne(three(), "p1");
+
+        check("the retry removes the suggestion", 1, retried);
+        check("the retry clears the applied record", false,
+                secrets.slots.containsKey(ProfileTable.appliedSlot("p1")));
+        check("the retry removes the platform suggestion", false,
+                manager.held.containsKey("p1"));
+    }
+
     private static void aRejectionStopsTheRemainingProfiles() {
         MapSecrets secrets = new MapSecrets();
         seedThree(secrets);
@@ -314,6 +343,7 @@ public final class SuggestionRegistryTest {
         final List<String> removes = new ArrayList<>();
         String rejectSsid;
         int rejectStatus;
+        boolean failRemove;
 
         @Override
         public int add(String id, SuggestionRecord record) {
@@ -328,6 +358,7 @@ public final class SuggestionRegistryTest {
         @Override
         public int remove(String id, SuggestionRecord record) {
             removes.add(id);
+            if (failRemove) return SuggestionRegistry.STATUS_REQUEST_FAILED;
             held.remove(id);
             return 1;
         }

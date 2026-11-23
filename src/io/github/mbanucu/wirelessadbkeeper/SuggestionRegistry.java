@@ -275,11 +275,17 @@ public final class SuggestionRegistry {
     public int removeAll(List<Profile> profiles) {
         migrate(profiles);
         int removed = 0;
+        boolean failed = false;
         for (Profile profile : profiles) {
-            removed += removeSlot(profile.id());
+            int result = removeSlot(profile.id());
+            if (result < 0) {
+                failed = true;
+            } else {
+                removed += result;
+            }
         }
         secrets.clear(ProfileTable.LEGACY_APPLIED_SLOT);
-        return removed;
+        return failed ? STATUS_REQUEST_FAILED : removed;
     }
 
     /** How many listed profiles have an applied record (the Android 10 count). */
@@ -323,7 +329,12 @@ public final class SuggestionRegistry {
         int removed = 0;
         if (applied != null && !applied.isEmpty()) {
             SuggestionRecord record = SuggestionRecord.decode(applied);
-            if (record != null) removed = manager.remove(id, record);
+            if (record != null) {
+                removed = manager.remove(id, record);
+                // Keep the record if the platform call failed: it is the only
+                // description Android 10 can match, so a retry is still possible.
+                if (removed < 0) return removed;
+            }
         }
         secrets.clear(slot);
         return removed;
