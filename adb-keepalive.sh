@@ -9,18 +9,20 @@
 # Port discovery, cheapest first:
 #   1. the port used last time (survives a plain Wi-Fi reconnect)
 #   2. mDNS: adbd advertises _adb-tls-connect._tcp itself (adb-mdns.py)
-#   3. a TCP scan of 30000-50000, only if mDNS stays silent
+#   3. a TCP scan of the kernel's ephemeral range, only if mDNS stays silent
+#      (PORT_START/PORT_END override it; the default is 32768-60999)
 #
 # Usage:  ./adb-keepalive.sh            run in foreground (Ctrl-C to stop)
 #         ./adb-keepalive.sh &          run in background
 # Log:    adb-keepalive.log
 
 set -u
-cd "$(dirname "$0")" || exit 1
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || exit 1
+cd "$SCRIPT_DIR" || exit 1
+# shellcheck source=discover.sh
+. "$SCRIPT_DIR/discover.sh" || exit 1
 
 LOG="adb-keepalive.log"
-PORT_START=${PORT_START:-30000}
-PORT_END=${PORT_END:-50000}
 MDNS=0
 python3 -c 'import zeroconf' >/dev/null 2>&1 && [ -x ./adb-mdns.py ] && MDNS=1
 
@@ -125,7 +127,7 @@ BAD=""
 # The keeper app pins adbd to 5555 when it can (pin-adb-port.sh). Prefer that
 # port, so this loop re-attaches there instead of hunting for a TLS port that no
 # longer exists. soft=1: a closed 5555 must stay a candidate for later rounds.
-PINNED_PORT=${ADB_PIN_PORT:-5555}
+PINNED_PORT=$ADB_PIN_PORT
 
 # try_port <port> [soft]
 #   soft=1: authoritative candidate (mDNS), never remembered as bad.

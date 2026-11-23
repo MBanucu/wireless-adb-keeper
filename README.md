@@ -56,19 +56,24 @@ samples and cannot be published, so it is the GitHub-handle form instead.
 
 - `adb-keepalive.sh` — polls `adb devices` every 5 s. On disconnect it tries, cheapest
   first: the pinned port 5555, the previous port, the port advertised over mDNS, then a
-  TCP scan of 30000–50000. Single instance, wake lock held, rotating log.
+  TCP scan of the kernel's ephemeral range (32768–60999 when
+  `/proc/sys/net/ipv4/ip_local_port_range` is readable, which it is not from Termux).
+  Single instance, wake lock held, rotating log.
 - `pin-adb-port.sh` — attaches to adbd (a serial the keepalive already holds, then
   mDNS, then a scan) and sends `adb tcpip 5555`. Run by the app, not by hand.
 - `keeper.sh` — laptop/Termux-side wrapper that maps friendly command names onto the
   app's content provider, and prints the `key=value` reply.
 - `wifi-on.sh` — turns the Wi-Fi radio on with `svc wifi enable` over Termux's adb,
-  which keeps working with the radio off because it goes through loopback. Run by the
-  app's **Turn Wi-Fi on** button.
+  which keeps working with the radio off because it goes through loopback. Tries the
+  pinned port first, then any serial adb already holds. Run by the app's
+  **Turn Wi-Fi on** button.
 - `adb-mdns.py` — reads adbd's own `_adb-tls-connect._tcp` advertisement with
   `python-zeroconf`, filters out stale advertisements, and prints the live port.
   Needs `pip install zeroconf`; without it the keepalive falls back to scanning.
 - `reconnect.sh` / `wait_adb.sh` — one-shot reconnect and a bounded "wait for adbd to
-  appear" helper, useful after rebooting the phone.
+  appear" helper, useful after rebooting the phone. Both try the pinned port first.
+- `discover.sh` — shared port range and pinned-port default, sourced by the scripts so
+  they cannot drift apart again.
 - Reboot/unlock and the autostart toggler live in the sibling `phone-link-tools`
   repository: `reboot.sh` waits for the new boot, `unlock.sh` clears the keyguard.
 
@@ -220,7 +225,7 @@ them executable:
 
 ```bash
 mkdir -p ~/wireless-adb-keeper
-cp pin-adb-port.sh wifi-on.sh ~/wireless-adb-keeper/
+cp pin-adb-port.sh wifi-on.sh discover.sh ~/wireless-adb-keeper/
 chmod +x ~/wireless-adb-keeper/*.sh
 ```
 

@@ -14,12 +14,13 @@
 # Exit:   0 pinned, 1 nothing to attach to (wireless debugging off / no adbd)
 
 set -u
-cd "$(dirname "$0")" || exit 1
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || exit 1
+cd "$SCRIPT_DIR" || exit 1
+# shellcheck source=discover.sh
+. "$SCRIPT_DIR/discover.sh" || exit 1
 
-PORT=${ADB_PIN_PORT:-5555}
+PORT=$ADB_PIN_PORT
 LOG="pin-adb-port.log"
-PORT_START=${PORT_START:-32768}
-PORT_END=${PORT_END:-60999}
 
 log() {
     echo "$(date '+%H:%M:%S') $*" >> "$LOG"

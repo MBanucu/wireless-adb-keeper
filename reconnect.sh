@@ -2,15 +2,18 @@
 # Reconnect ADB to this phone's wireless debugging port.
 #
 # adbd picks a new random port every time wireless debugging is restarted,
-# so the previous "adb connect 127.0.0.1:PORT" address goes stale. This scans
-# localhost for the new port and connects to the first one that accepts us.
+# so the previous "adb connect 127.0.0.1:PORT" address goes stale. This tries
+# the pinned port first, then scans localhost for the new port and connects to
+# the first one that accepts us.
 #
 # Usage: ./reconnect.sh [--full]
 #   --full  also scan the Wi-Fi subnet in addition to localhost
 
 set -u
-RANGE_START=30000
-RANGE_END=50000
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || exit 1
+cd "$SCRIPT_DIR" || exit 1
+# shellcheck source=discover.sh
+. "$SCRIPT_DIR/discover.sh" || exit 1
 
 echo "== current devices =="
 adb devices -l
@@ -20,8 +23,29 @@ if adb devices | awk '$2=="device"{found=1} END{exit !found}'; then
     exit 0
 fi
 
-echo "== scanning ports $RANGE_START-$RANGE_END =="
-PORTS=$(python3 - "$RANGE_START" "$RANGE_END" <<'PY'
+# try_connect <port>: connect and wait for adb to report "device".
+try_connect() {
+    local port="$1" state
+    [ -n "$port" ] && [ "$port" != "5037" ] || return 1
+    echo "-- trying 127.0.0.1:$port"
+    timeout 8 adb connect "127.0.0.1:$port" >/dev/null 2>&1
+    for _ in $(seq 1 6); do
+        state=$(adb devices | awk -v a="127.0.0.1:$port" '$1==a{print $2}')
+        if [ "$state" = "device" ]; then
+            echo "connected: 127.0.0.1:$port"
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+if try_connect "$ADB_PIN_PORT"; then
+    exit 0
+fi
+
+echo "== scanning ports $PORT_START-$PORT_END =="
+PORTS=$(python3 - "$PORT_START" "$PORT_END" <<'PY'
 import asyncio, sys
 
 start, end = int(sys.argv[1]), int(sys.argv[2])
@@ -55,16 +79,10 @@ fi
 echo "candidates: $PORTS"
 for port in $PORTS; do
     [ "$port" = "5037" ] && continue
-    echo "-- trying 127.0.0.1:$port"
-    timeout 8 adb connect "127.0.0.1:$port" >/dev/null 2>&1
-    for _ in $(seq 1 6); do
-        state=$(adb devices | awk -v a="127.0.0.1:$port" '$1==a{print $2}')
-        if [ "$state" = "device" ]; then
-            echo "connected: 127.0.0.1:$port"
-            exit 0
-        fi
-        sleep 1
-    done
+    [ "$port" = "$ADB_PIN_PORT" ] && continue
+    if try_connect "$port"; then
+        exit 0
+    fi
 done
 
 echo "no working port found"
