@@ -23,17 +23,21 @@ work=$here/out/unit
 listing=$here/out/unit.sources
 mkdir -p "$here/out"
 
-# build.sh reads ANDROID_JAR, then a jar beside its own script, then the newest
-# installed platform. Keep the same order; also accept one beside this script.
+# build.sh reads ANDROID_JAR, then the newest installed platform, then a jar
+# beside the script. Keep the same order: a stale android.jar at the repository
+# root must not win over an SDK platform that the app actually targets.
 android_jar=${ANDROID_JAR:-}
+if [ -z "$android_jar" ]; then
+    # `sort -V` matters: a plain lexicographic tail would put android-9 after
+    # android-35, and an older jar then fails on constants the app uses.
+    android_jar=$(ls -1 "$HOME"/android-sdk/platforms/*/android.jar 2>/dev/null \
+        | sort -V | tail -1 || true)
+fi
 for candidate in "$here/android.jar" "$root/android.jar"; do
     if [ -z "$android_jar" ] && [ -f "$candidate" ]; then
         android_jar=$candidate
     fi
 done
-if [ -z "$android_jar" ]; then
-    android_jar=$(ls -1 "$HOME"/android-sdk/platforms/*/android.jar 2>/dev/null | tail -1 || true)
-fi
 if [ -n "$android_jar" ] && [ ! -f "$android_jar" ]; then
     android_jar=
 fi

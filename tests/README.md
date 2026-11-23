@@ -68,11 +68,12 @@ size, and the chosen `android.jar` are unchanged since the last run. A deleted
 suite changes the list, so its class is removed with the rest of the output
 rather than left behind.
 
-`android.jar` is found in the same order as `build.sh`: `ANDROID_JAR`, then a
-jar beside `tests/unit.sh` or at the repository root, then the newest
-`$HOME/android-sdk/platforms/*/android.jar`. With a jar, all of `src/` is
-compiled against it. Without one, only sources that do not `import android.*`
-are compiled, which is enough for the pure suites.
+`android.jar` is found in the same order as `build.sh`: `ANDROID_JAR`, then the
+newest `$HOME/android-sdk/platforms/*/android.jar`, then a jar beside
+`tests/unit.sh` or at the repository root. The SDK wins over a stale root jar
+on purpose: the app targets constants that an older jar does not have. With a
+jar, all of `src/` is compiled against it. Without one, only sources that do
+not `import android.*` are compiled, which is enough for the pure suites.
 
 The **run** classpath contains the test output only - deliberately not
 `android.jar`. A suite that reaches an Android API by accident fails with
