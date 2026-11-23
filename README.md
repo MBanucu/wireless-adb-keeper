@@ -167,7 +167,7 @@ app's `android.jar`, so neither needs a hand-written `javac` line:
 
 ```bash
 ./gradlew probeUnit   # the tests/unit suites, no device, no JUnit
-./gradlew probe       # probeUnit plus IdentityProbe, TokenProbe, ResultProbe and the scripts
+./gradlew probe       # probeUnit plus TokenProbe, ResultProbe and the scripts
 ./gradlew probeResult # TermuxResult: the RESULT-line parser, no device
 ./gradlew probeScripts # pin-adb-port.sh, wait_adb.sh, wifi-on.sh with a fake adb
 ./gradlew probeAdb    # AdbProbe: needs a phone with adbd on 127.0.0.1:5555

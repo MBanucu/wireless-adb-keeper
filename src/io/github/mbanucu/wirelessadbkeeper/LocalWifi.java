@@ -42,10 +42,7 @@ public final class LocalWifi {
     public static final String PERM_LOCATION = "android.permission.ACCESS_FINE_LOCATION";
 
     private static final long REQUEST_TIMEOUT_MS = 90_000L;
-    private static final long MIN_GAP_MS = 30_000L;
     private static final long RECONNECT_DELAY_MS = 10_000L;
-    private static final int MAX_AUTO_ATTEMPTS = 3;
-    private static final long[] RETRY_MS = {60_000L, 5 * 60_000L, 15 * 60_000L};
 
     /** Shown in the UI: off, disabled, requesting, connected, lost, paused, ... */
     public static volatile String state = "off";
@@ -64,8 +61,7 @@ public final class LocalWifi {
     private Listener listener;
     private boolean requesting;
     private boolean started;
-    private int attempts;
-    private long lastAttemptAt;
+    private final Backoff backoff = new Backoff();
     private Runnable pending;
 
     public LocalWifi(Context context) {
@@ -150,8 +146,7 @@ public final class LocalWifi {
     public void start() {
         if (started) return;
         started = true;
-        attempts = 0;
-        lastAttemptAt = 0;
+        backoff.reset();
         if (!enabled(context)) {
             state = "disabled";
             detail = "";
@@ -171,8 +166,7 @@ public final class LocalWifi {
     }
 
     public void retryNow() {
-        attempts = 0;
-        lastAttemptAt = 0;
+        backoff.reset();
         if (!started) {
             start();
             return;
@@ -187,8 +181,8 @@ public final class LocalWifi {
     /** Called when Android reports any Wi-Fi network becoming available. */
     public void onWifiAvailable() {
         if (!started || network != null || requesting) return;
-        if (attempts >= MAX_AUTO_ATTEMPTS) return;
-        lastAttemptAt = 0;
+        if (backoff.exhausted()) return;
+        backoff.clearGap();
         request(2_000L);
     }
 
@@ -254,7 +248,7 @@ public final class LocalWifi {
             return;
         }
 
-        long wait = lastAttemptAt + MIN_GAP_MS - SystemClock.elapsedRealtime();
+        long wait = backoff.gapMs(SystemClock.elapsedRealtime());
         if (wait > 0) {
             request(wait);
             return;
@@ -293,7 +287,7 @@ public final class LocalWifi {
                 if (callback != this) return;
                 network = n;
                 requesting = false;
-                attempts = 0;
+                backoff.success();
                 state = "connected";
                 detail = target;
                 Log.i(Ensurer.TAG, "local wifi connected: " + target);
@@ -315,7 +309,7 @@ public final class LocalWifi {
                 detail = target;
                 Log.i(Ensurer.TAG, "local wifi lost: " + target);
                 releaseCallback();
-                if (started && attempts < MAX_AUTO_ATTEMPTS) {
+                if (started && !backoff.exhausted()) {
                     request(RECONNECT_DELAY_MS);
                 }
             }
@@ -324,25 +318,26 @@ public final class LocalWifi {
             public void onUnavailable() {
                 if (callback != this) return;
                 requesting = false;
-                attempts++;
+                backoff.failed();
                 useWpa3 = !useWpa3;
                 releaseCallback();
-                Log.w(Ensurer.TAG, "local wifi unavailable (attempt " + attempts
+                Log.w(Ensurer.TAG, "local wifi unavailable (attempt " + backoff.attempts()
                         + ", " + security + "): " + target);
-                if (attempts >= MAX_AUTO_ATTEMPTS) {
+                if (backoff.exhausted()) {
                     state = "paused";
                     detail = "approve in dialog or tap Connect now";
-                    Log.w(Ensurer.TAG, "local wifi: pausing after " + attempts + " attempts");
+                    Log.w(Ensurer.TAG, "local wifi: pausing after " + backoff.attempts()
+                            + " attempts");
                     return;
                 }
                 state = "requesting";
                 detail = "waiting for approval";
-                request(RETRY_MS[Math.min(attempts - 1, RETRY_MS.length - 1)]);
+                request(backoff.retryDelayMs());
             }
         };
 
         requesting = true;
-        lastAttemptAt = SystemClock.elapsedRealtime();
+        backoff.attempted(SystemClock.elapsedRealtime());
         callback = cb;
         state = "requesting";
         detail = target;

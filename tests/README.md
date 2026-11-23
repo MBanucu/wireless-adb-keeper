@@ -73,12 +73,20 @@ newest `$HOME/android-sdk/platforms/*/android.jar`, then a jar beside
 `tests/unit.sh` or at the repository root. The SDK wins over a stale root jar
 on purpose: the app targets constants that an older jar does not have. With a
 jar, all of `src/` is compiled against it. Without one, only sources that do
-not `import android.*` are compiled, which is enough for the pure suites.
+not `import android.*` are compiled, which is enough for the six pure seam
+suites but not for the two ported probe suites below.
 
 The **run** classpath contains the test output only - deliberately not
 `android.jar`. A suite that reaches an Android API by accident fails with
 `NoClassDefFoundError` instead of passing because a stub happened to be on the
 classpath.
+
+The identity and certificate suites are the exception to the jar-less subset:
+their classes (`AdbIdentity`, `AdbCertificate`) import `android.content.Context`
+for the device-protected storage entry points, which the suites never call.
+They need the jar to compile, like the app itself; the six pure seam suites
+(`DiagFormat`, `DiagSnapshot`, `SuggestionRecord`, `Backoff`, `EnsureDecision`,
+`ControlArgs`) do not.
 
 ## What this deliberately does not test
 
@@ -90,8 +98,11 @@ classpath.
 - `RUN_COMMAND` delivery from Termux, the app's receiver wiring and the Status
   page. `tools/result-contract.sh` checks the scripts' side with a fake adb, and
   `probeAdb` is the manual phone check.
-- Script behaviour beyond the `RESULT` contract. `tools/*Probe.java` remain
-  runnable; their checks move into suites separately.
+- Script behaviour beyond the `RESULT` contract. `tools/AdbProbe` stays a
+  manual device probe; `tools/TokenProbe` and `tools/ResultProbe` remain
+  runnable alongside their Gradle tasks. The old identity, certificate and
+  provider probes are now `IdentityTest`, `CertificateTest` and `ProviderTest`,
+  so one gate counts their checks.
 - UI, accessibility and anything timing-dependent on the phone.
 
 The harness also does not pretend that zero suites is a pass: `unit.sh` exits 1

@@ -44,7 +44,7 @@ jobs:
           "$SDKMANAGER" --install "platforms;android-35" "build-tools;36.0.0"
 
       # There is no JUnit dependency (it does not resolve offline), so `test` is
-      # wired in build.gradle.kts to the device-free IdentityProbe.
+      # wired in build.gradle.kts to the device-free tests/unit suites and probes.
       - name: Test, lint and assemble
         run: ./gradlew test lint assembleDebug --stacktrace
 

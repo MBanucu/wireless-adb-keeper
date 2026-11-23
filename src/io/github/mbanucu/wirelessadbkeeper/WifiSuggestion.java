@@ -34,10 +34,10 @@ public final class WifiSuggestion {
     /** Encrypted in PassphraseStore, never in this prefs file. */
     private static final String SLOT_APPLIED = "wifi_suggestion_applied";
 
-    private static final String SEC_WPA2 = "wpa2";
-    private static final String SEC_WPA3 = "wpa3";
-    private static final String SEC_OWE = "owe";
-    private static final String SEC_OPEN = "open";
+    private static final String SEC_WPA2 = SuggestionRecord.SEC_WPA2;
+    private static final String SEC_WPA3 = SuggestionRecord.SEC_WPA3;
+    private static final String SEC_OWE = SuggestionRecord.SEC_OWE;
+    private static final String SEC_OPEN = SuggestionRecord.SEC_OPEN;
 
     private WifiSuggestion() {
     }
@@ -76,7 +76,7 @@ public final class WifiSuggestion {
 
         // Re-adding an identical suggestion makes Android drop the network for a
         // moment, so only rewrite it when the configuration actually changed.
-        String wanted = record(ssid, security, secret);
+        String wanted = SuggestionRecord.encode(ssid, security, secret);
         if (wanted.equals(applied) && count(c) > 0) {
             Log.i(Ensurer.TAG, "wifi suggestion already present for " + ssid);
             return STATUS_SUCCESS;
@@ -161,7 +161,7 @@ public final class WifiSuggestion {
         String legacy = store.getString(KEY_LEGACY_APPLIED, null);
         if (legacy != null) {
             if (stored.isEmpty()) {
-                String migrated = normalizeLegacy(legacy);
+                String migrated = SuggestionRecord.migrate(legacy);
                 if (!migrated.isEmpty()
                         && PassphraseStore.putSecret(c, SLOT_APPLIED, migrated)) {
                     stored = migrated;
@@ -197,48 +197,12 @@ public final class WifiSuggestion {
         if (Build.VERSION.SDK_INT >= 30) {
             return wm.getNetworkSuggestions();
         }
-        WifiNetworkSuggestion previous = fromRecord(applied);
+        SuggestionRecord previous = SuggestionRecord.decode(applied);
         if (previous == null) {
             return Collections.emptyList();
         }
-        return Collections.singletonList(previous);
-    }
-
-    /** `ssid \0 security \0 passphrase`: the record sealed in PassphraseStore. */
-    private static String record(String ssid, String security, String pass) {
-        return ssid + "\u0000" + security + "\u0000" + pass;
-    }
-
-    /** Rewrites a legacy plaintext record in the current shape. */
-    private static String normalizeLegacy(String legacy) {
-        if (legacy == null || legacy.isEmpty()) return "";
-        int first = legacy.indexOf('\u0000');
-        if (first < 0) return "";
-        int second = legacy.indexOf('\u0000', first + 1);
-        String ssid = legacy.substring(0, first);
-        if (second < 0) {
-            // The original shape had no security field and was always WPA2.
-            return record(ssid, SEC_WPA2, legacy.substring(first + 1));
-        }
-        String security = legacy.substring(first + 1, second);
-        if (!SEC_WPA2.equals(security) && !SEC_WPA3.equals(security)
-                && !SEC_OWE.equals(security) && !SEC_OPEN.equals(security)) {
-            security = SEC_WPA2;
-        }
-        return record(ssid, security, legacy.substring(second + 1));
-    }
-
-    private static WifiNetworkSuggestion fromRecord(String record) {
-        if (record == null || record.isEmpty()) return null;
-        int first = record.indexOf('\u0000');
-        if (first < 0) return null;
-        int second = record.indexOf('\u0000', first + 1);
-        if (second < 0) {
-            // Records written before the security field existed were always WPA2.
-            return suggest(record.substring(0, first), SEC_WPA2, record.substring(first + 1));
-        }
-        return suggest(record.substring(0, first), record.substring(first + 1, second),
-                record.substring(second + 1));
+        return Collections.singletonList(
+                suggest(previous.ssid(), previous.security(), previous.passphrase()));
     }
 
     private static WifiNetworkSuggestion suggest(String ssid, String security, String pass) {

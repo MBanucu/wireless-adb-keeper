@@ -18,7 +18,9 @@ import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 import java.util.TimeZone;
 
@@ -134,46 +136,59 @@ public final class Diag {
      */
     public static String status(Context c) {
         if (c == null) return "";
-        StringBuilder out = new StringBuilder();
-        put(out, "app_version", new Value() {
-            @Override
-            public String get() throws Exception {
+        List<DiagSnapshot.Field> fields = new ArrayList<>();
+        fields.add(new DiagSnapshot.Field("app_version", () -> {
+            try {
                 return c.getPackageManager().getPackageInfo(c.getPackageName(), 0).versionName;
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
             }
-        });
-        put(out, "android", () -> Build.VERSION.RELEASE + " (sdk " + Build.VERSION.SDK_INT + ")");
-        put(out, "uptime_s", () -> String.valueOf(SystemClock.elapsedRealtime() / 1000));
-        put(out, "process_started_after_boot_s",
-                () -> String.valueOf(Process.getStartElapsedRealtime() / 1000));
-        put(out, "unlocked", () -> String.valueOf(unlocked(c)));
-        put(out, "mode", () -> LocalWifi.mode(c));
-        put(out, "service", () -> MonitorService.running ? "running" : "stopped");
-        put(out, "adb_wifi_enabled", () -> String.valueOf(Ensurer.isWirelessDebuggingOn(c)));
-        put(out, "dev_settings", new Value() {
-            @Override
-            public String get() throws Exception {
+        }));
+        fields.add(new DiagSnapshot.Field("android",
+                () -> Build.VERSION.RELEASE + " (sdk " + Build.VERSION.SDK_INT + ")"));
+        fields.add(new DiagSnapshot.Field("uptime_s",
+                () -> String.valueOf(SystemClock.elapsedRealtime() / 1000)));
+        fields.add(new DiagSnapshot.Field("process_started_after_boot_s",
+                () -> String.valueOf(Process.getStartElapsedRealtime() / 1000)));
+        fields.add(new DiagSnapshot.Field("unlocked", () -> String.valueOf(unlocked(c))));
+        fields.add(new DiagSnapshot.Field("mode", () -> LocalWifi.mode(c)));
+        fields.add(new DiagSnapshot.Field("service",
+                () -> MonitorService.running ? "running" : "stopped"));
+        fields.add(new DiagSnapshot.Field("adb_wifi_enabled",
+                () -> String.valueOf(Ensurer.isWirelessDebuggingOn(c))));
+        fields.add(new DiagSnapshot.Field("dev_settings", () -> {
+            try {
                 return String.valueOf(Settings.Global.getInt(
                         c.getContentResolver(), Ensurer.KEY_DEV_SETTINGS, 0) == 1);
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
             }
-        });
-        put(out, "wifi_connected", () -> String.valueOf(Ensurer.isWifiConnected(c)));
-        put(out, "port_5555", PinnedPort::state);
-        put(out, "pin_result", PinnedPort::result);
-        put(out, "wifi_result", WifiRadio::result);
-        put(out, "termux_installed", () -> String.valueOf(PinnedPort.hasTermux(c)));
-        put(out, "termux_grant", () -> String.valueOf(PinnedPort.termuxUsable(c)));
-        put(out, "last_result", () -> LocalWifi.detail == null || LocalWifi.detail.isEmpty()
-                ? "none" : LocalWifi.detail);
-        put(out, "perm_write_secure_settings", () -> permission(c,
-                android.Manifest.permission.WRITE_SECURE_SETTINGS));
-        put(out, "perm_location", () -> LocalWifi.supported()
-                ? permission(c, LocalWifi.PERM_LOCATION) : "not needed before Android 10");
-        put(out, "perm_notifications", () -> permission(c, "android.permission.POST_NOTIFICATIONS"));
-        put(out, "key_present", () -> String.valueOf(
-                new File(AdbIdentity.dir(c), AdbIdentity.KEY_FILE).isFile()));
-        put(out, "journal_events", () -> count(c) + " entries");
-        put(out, "journal_bytes", () -> String.valueOf(file(c).length()));
-        return out.toString();
+        }));
+        fields.add(new DiagSnapshot.Field("wifi_connected",
+                () -> String.valueOf(Ensurer.isWifiConnected(c))));
+        fields.add(new DiagSnapshot.Field("port_5555", PinnedPort::state));
+        fields.add(new DiagSnapshot.Field("pin_result", PinnedPort::result));
+        fields.add(new DiagSnapshot.Field("wifi_result", WifiRadio::result));
+        fields.add(new DiagSnapshot.Field("termux_installed",
+                () -> String.valueOf(PinnedPort.hasTermux(c))));
+        fields.add(new DiagSnapshot.Field("termux_grant",
+                () -> String.valueOf(PinnedPort.termuxUsable(c))));
+        fields.add(new DiagSnapshot.Field("last_result",
+                () -> LocalWifi.detail == null || LocalWifi.detail.isEmpty()
+                        ? "none" : LocalWifi.detail));
+        fields.add(new DiagSnapshot.Field("perm_write_secure_settings",
+                () -> permission(c, android.Manifest.permission.WRITE_SECURE_SETTINGS)));
+        fields.add(new DiagSnapshot.Field("perm_location", () -> LocalWifi.supported()
+                ? permission(c, LocalWifi.PERM_LOCATION) : "not needed before Android 10"));
+        fields.add(new DiagSnapshot.Field("perm_notifications",
+                () -> permission(c, "android.permission.POST_NOTIFICATIONS")));
+        fields.add(new DiagSnapshot.Field("key_present", () -> String.valueOf(
+                new File(AdbIdentity.dir(c), AdbIdentity.KEY_FILE).isFile())));
+        fields.add(new DiagSnapshot.Field("journal_events",
+                () -> count(c) + " entries"));
+        fields.add(new DiagSnapshot.Field("journal_bytes",
+                () -> String.valueOf(file(c).length())));
+        return DiagSnapshot.render(fields);
     }
 
     /** Status followed by the journal, for `content call --method diag`. */
@@ -182,20 +197,6 @@ public final class Diag {
     }
 
     // ---------------------------------------------------------------- internals
-
-    private interface Value {
-        String get() throws Exception;
-    }
-
-    private static void put(StringBuilder out, String key, Value value) {
-        String v;
-        try {
-            v = value.get();
-        } catch (Throwable t) {
-            v = "unavailable: " + t.getClass().getSimpleName();
-        }
-        out.append(key).append('=').append(oneLine(v)).append('\n');
-    }
 
     private static String permission(Context c, String name) {
         if (Build.VERSION.SDK_INT < 23) return "n/a";
@@ -212,21 +213,7 @@ public final class Diag {
         long uptime = SystemClock.elapsedRealtime() / 1000;
         SimpleDateFormat f = new SimpleDateFormat(TIME, Locale.US);
         f.setTimeZone(TimeZone.getTimeZone("GMT"));
-        return f.format(new Date()) + " " + uptime + "s " + level + " " + code
-                + (detail == null || detail.isEmpty() ? "" : " " + scrub(detail));
-    }
-
-    /** Removes the one secret shape that is easy to include by accident. */
-    static String scrub(String detail) {
-        String out = detail.replaceAll("(?i)passphrase=\\S+", "passphrase=***");
-        out = out.replaceAll("(?i)token=\\S+", "token=***");
-        out = out.replaceAll("(?i)pairing_code=\\S+", "pairing_code=***");
-        return out.replace('\n', ' ').replace('\r', ' ');
-    }
-
-    private static String oneLine(String value) {
-        if (value == null) return "";
-        return value.replace('\n', ' ').replace('\r', ' ');
+        return DiagFormat.line(f.format(new Date()), uptime, level, code, detail);
     }
 
     /** The journal file, in device-protected storage so boot events survive. */
@@ -267,16 +254,8 @@ public final class Diag {
 
     /** Enforces both caps from the front: the newest entries are the useful ones. */
     private static void trim(ArrayDeque<String> lines) {
-        while (lines.size() > MAX_EVENTS) {
-            lines.removeFirst();
-        }
-        long bytes = 0;
-        for (String line : lines) {
-            bytes += line.getBytes(StandardCharsets.UTF_8).length + 1;
-        }
-        while (bytes > MAX_BYTES && lines.size() > 1) {
-            String removed = lines.removeFirst();
-            bytes -= removed.getBytes(StandardCharsets.UTF_8).length + 1;
-        }
+        List<String> kept = DiagFormat.trim(new ArrayList<>(lines), MAX_EVENTS, MAX_BYTES);
+        lines.clear();
+        lines.addAll(kept);
     }
 }

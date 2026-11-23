@@ -79,11 +79,12 @@ sequence, its encoded public key matches `.android/adbkey.pub` byte for byte, an
 builds still pass. **Met.**
 
 The signature encoding was also checked against the platform's own provider, not just
-re-derived by hand: `tools/ProviderProbe` signs a token and verifies the block with
+re-derived by hand: `ProviderTest` signs a token and verifies the block with
 `NONEwithRSA`, and rejects it under `SHA1withRSA` (which hashes the token again — the
-mistake the javadoc warns about). Run on the phone with
-`dalvikvm -cp probe.jar …ProviderProbe`, it reports `AndroidOpenSSL version 1.0` and all
-four checks pass, so Conscrypt and the JDK agree on the block `AdbKey.sign` produces.
+mistake the javadoc warns about). Run as part of `bash tests/unit.sh`, all four
+checks pass on the JDK's provider; the same checks passed on the phone's
+Conscrypt (`AndroidOpenSSL version 1.0`) before they moved into the suite, so both
+providers agree on the block `AdbKey.sign` produces.
 
 *Risk:* protocol handshake details (checksum, `AUTH` signature padding, shell v2 vs
 legacy shell). Note for M3: adb's TLS is an `STLS` upgrade of the same socket, not a
