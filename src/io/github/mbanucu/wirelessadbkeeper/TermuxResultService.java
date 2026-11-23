@@ -68,14 +68,18 @@ public final class TermuxResultService extends Service {
                 SystemClock.elapsedRealtime());
 
         String code = result.isPinScript() ? "pin.result" : "script.result";
+        if (result.isPinScript()) {
+            // PinnedPort owns the pin reason codes: one event, with the specific
+            // cause (allow-external-apps, refused, non-zero, ...).
+            PinnedPort.recordResult(this, result);
+            return;
+        }
         if (result.ok()) {
             Diag.info(this, code, result.journal());
         } else {
             Diag.warn(this, code, result.journal());
         }
-        if (result.isPinScript()) {
-            PinnedPort.recordResult(result);
-        } else if (result.isWifiScript()) {
+        if (result.isWifiScript()) {
             WifiRadio.recordResult(result);
         }
     }

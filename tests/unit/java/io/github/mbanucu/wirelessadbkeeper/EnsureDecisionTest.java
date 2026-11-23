@@ -25,7 +25,7 @@ public final class EnsureDecisionTest {
     }
 
     public static void main(String[] args) {
-        check("every reason has a journal code", 5, Reason.values().length);
+        check("every reason has a journal code", 6, Reason.values().length);
 
         check("no permission is ensure.no_permission", Reason.NO_PERMISSION,
                 decide(false, true, true, true, true));
@@ -47,6 +47,12 @@ public final class EnsureDecisionTest {
         check("a failure records at error", "error", Reason.FAILED.level());
         check("a failure carries its exact journal code", "ensure.failed",
                 Reason.FAILED.code());
+
+        check("a refused write is ensure.settings_refused", "ensure.settings_refused",
+                Reason.SETTINGS_REFUSED.code());
+        check("a refused write records at error", "error", Reason.SETTINGS_REFUSED.level());
+        check("a refused write carries its exact result", "Settings write refused",
+                Reason.SETTINGS_REFUSED.result());
 
         check("wireless debugging off is ensure.changed", Reason.CHANGED,
                 decide(true, true, true, true, false));

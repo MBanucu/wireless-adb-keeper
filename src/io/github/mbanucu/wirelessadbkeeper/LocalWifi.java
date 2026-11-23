@@ -48,6 +48,8 @@ public final class LocalWifi {
     /** Shown in the UI: off, disabled, requesting, connected, lost, paused, ... */
     public static volatile String state = "off";
     public static volatile String detail = "";
+    /** Last local-only reason journalled; retries must not fill the journal. */
+    private static String lastJournal = "";
 
     public interface Listener {
         void onConnected(String ssid);
@@ -156,6 +158,7 @@ public final class LocalWifi {
     public void start() {
         if (started) return;
         started = true;
+        lastJournal = "";
         backoff.reset();
         if (!enabled(context)) {
             state = "disabled";
@@ -233,13 +236,18 @@ public final class LocalWifi {
         }
         if (!hasLocationPermission(context)) {
             state = "no permission";
-            detail = "grant Location";
+            detail = "fix: " + PermissionAudit.grantCommand(
+                    context.getPackageName(), PERM_LOCATION);
             Log.w(Ensurer.TAG, "local wifi: missing " + PERM_LOCATION);
+            journal("warn", "local.no_permission",
+                    "location not granted; " + detail);
             return;
         }
         if (!wifiEnabled()) {
             state = "wifi off";
             detail = "";
+            journal("warn", "local.wifi_off", "Wi-Fi radio is off; turn it on by hand or"
+                    + " with the Turn Wi-Fi on button");
             return;
         }
 
@@ -265,10 +273,15 @@ public final class LocalWifi {
         }
 
         String pass = passphrase(context);
+        if (pass == null) {
+            journal("warn", "wifi.secret.undecryptable",
+                    "the saved passphrase cannot be decrypted; save it again");
+        }
         cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
         if (cm == null) {
             state = "error";
             detail = "no ConnectivityManager";
+            journal("error", "local.no_service", "ConnectivityManager is unavailable");
             return;
         }
 
@@ -338,10 +351,17 @@ public final class LocalWifi {
                     detail = "approve in dialog or tap Connect now";
                     Log.w(Ensurer.TAG, "local wifi: pausing after " + backoff.attempts()
                             + " attempts");
+                    journal("warn", "local.attempts_exhausted",
+                            "no approval after " + backoff.attempts()
+                                    + " attempts for " + target
+                                    + "; approve in the dialog or tap Connect now");
                     return;
                 }
                 state = "requesting";
                 detail = "waiting for approval";
+                journal("warn", "local.dialog_timeout",
+                        "the approval dialog timed out for " + target
+                                + " (attempt " + backoff.attempts() + ")");
                 request(backoff.retryDelayMs());
             }
         };
@@ -360,12 +380,16 @@ public final class LocalWifi {
             state = "error";
             detail = "permission denied";
             Log.e(Ensurer.TAG, "local wifi request denied", e);
+            journal("error", "local.request_refused",
+                    "the local-only request was refused: " + e);
         } catch (Exception e) {
             requesting = false;
             releaseCallback();
             state = "error";
             detail = String.valueOf(e.getMessage());
             Log.e(Ensurer.TAG, "local wifi request failed", e);
+            journal("error", "local.request_failed",
+                    "the local-only request failed for " + target + ": " + e);
         }
     }
 
@@ -388,6 +412,16 @@ public final class LocalWifi {
             handler.removeCallbacks(pending);
             pending = null;
         }
+    }
+
+    /** Journals a local-only reason once per distinct occurrence. */
+    private void journal(String level, String code, String detail) {
+        String key = level + " " + code + " " + detail;
+        synchronized (LocalWifi.class) {
+            if (key.equals(lastJournal)) return;
+            lastJournal = key;
+        }
+        Diag.event(context, level, code, detail);
     }
 
     @SuppressWarnings("deprecation")

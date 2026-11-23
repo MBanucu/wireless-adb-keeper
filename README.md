@@ -240,8 +240,9 @@ adb shell pm grant io.github.mbanucu.wirelessadbkeeper com.termux.permission.RUN
 The `RUN_COMMAND` grant is needed for the fixed port and for the **Turn Wi-Fi on**
 button (see below), and only works once the installed APK declares it — granting it to an older build is a
 silent no-op. Losing it does not break anything loudly: the app keeps running and
-keeps logging, and only `pin check: closed (grant com.termux.permission.RUN_COMMAND)`
-in logcat says why the port never comes back — which is exactly the situation in
+keeps logging, and only `pin.no_permission` (or the state line
+`closed (grant com.termux.permission.RUN_COMMAND; fix: adb shell pm grant …)`)
+says why the port never comes back — which is exactly the situation in
 which there is no cable to fix it with. Hence the script.
 
 Both scripts the app runs live in `~/wireless-adb-keeper/`, so copy them there and mark
@@ -394,8 +395,11 @@ not only in `logcat`.
 
 - **Diag tab** in the app: a `key=value` snapshot (uptime, process start, unlock
   state, mode, service, wireless flag, port 5555, the last `pin_result` and
-  `wifi_result`, Termux and permission state, journal size) above the recent
-  events, with **Copy diagnostics** and **Refresh**.
+  `wifi_result`, the `perm.*` permission audit, key and certificate presence,
+  journal size) above the recent events, with **Copy diagnostics** and
+  **Refresh**. The audit lists every capability with granted/not granted and
+  the exact command that fixes it, so a revoked
+  `WRITE_SECURE_SETTINGS` is visible before anything is pressed.
 - **From adb** (and therefore from a script):
 
   ```bash
@@ -412,18 +416,10 @@ The journal is a ring buffer of the last 200 events, 32 KiB at most, in
 `MonitorService` run at `LOCKED_BOOT_COMPLETED`, before the first unlock, so an
 event recorded there is still readable afterwards and survives a reboot.
 
-Event codes are stable (`area.action`), so `grep` works on a copied report:
-
-| Code | Meaning |
-|---|---|
-| `boot.received`, `boot.jobs`, `boot.start_failed` | the boot receiver ran, scheduled the ensure jobs, or failed to start the service |
-| `svc.start`, `svc.unlocked`, `svc.mode`, `svc.connect` | service created (with unlock state), mode applied after unlock, mode or connect request |
-| `ensure.changed`, `ensure.noop`, `ensure.no_wifi`, `ensure.no_permission`, `ensure.failed` | what `Ensurer` did, journalled only when the result changes |
-| `pin.state` | the 5555 probe changed state (listening or the reason it is not) |
-| `pin.result`, `script.result` | Termux returned a script's stdout, stderr, exit code and final `RESULT` line |
-| `pin.fallback` | the port probe is the only evidence: Termux is older than 0.109 or sent no result |
-| `wifi.suggest.added`, `wifi.suggest.failed`, `wifi.suggest.no_password`, `wifi.suggest.build_failed`, `wifi.suggest.record_unsealed` | suggestion result, with the raw status code in the detail |
-| `wifi.secret.undecryptable`, `wifi.secret.unsealable` | the Keystore could not read or write a secret, e.g. after a lock-screen change |
+Event codes are stable (`area.action`), so `grep` works on a copied report. Every
+failure site emits exactly one event with a code, a level and one sentence; the
+snapshot fields and the full code table (including every `perm.*` fix command)
+are in [docs/diagnostics.md](docs/diagnostics.md).
 
 The password, the control token and a pairing code are never written: the
 diagnostic API has no parameter for them, and the formatter scrubs

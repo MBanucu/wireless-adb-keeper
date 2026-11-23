@@ -75,24 +75,39 @@ public final class Ensurer {
     public static String ensure(Context c, String reason) {
         if (!hasPermission(c)) {
             Log.w(TAG, "ensure: missing WRITE_SECURE_SETTINGS");
-            return record(c, reason, EnsureDecision.Reason.NO_PERMISSION);
+            return record(c, reason, EnsureDecision.Reason.NO_PERMISSION,
+                    "Missing WRITE_SECURE_SETTINGS permission; fix: "
+                            + PermissionAudit.grantCommand(c.getPackageName(), PERM));
         }
         if (!isWifiConnected(c)) {
             Log.i(TAG, "ensure: no Wi-Fi, skipping");
-            return record(c, reason, EnsureDecision.Reason.NO_WIFI);
+            return record(c, reason, EnsureDecision.Reason.NO_WIFI,
+                    "Wi-Fi not connected; remembered SSID: " + rememberedSsid(c));
         }
         ContentResolver cr = c.getContentResolver();
+        boolean devSettingsOn;
+        boolean adbOn;
         try {
-            boolean devSettingsOn = Settings.Global.getInt(cr, KEY_DEV_SETTINGS, 0) != 0;
-            boolean adbOn = Settings.Global.getInt(cr, KEY_ADB_WIFI, 0) == 1;
-            EnsureDecision.Reason decision = EnsureDecision.decide(
-                    new EnsureDecision.Inputs(true, true, true, devSettingsOn, adbOn));
+            devSettingsOn = Settings.Global.getInt(cr, KEY_DEV_SETTINGS, 0) != 0;
+            adbOn = Settings.Global.getInt(cr, KEY_ADB_WIFI, 0) == 1;
+        } catch (Exception e) {
+            Log.e(TAG, "ensure: cannot read settings", e);
+            return record(c, reason, EnsureDecision.Reason.FAILED,
+                    "could not read the wireless debugging setting: " + e);
+        }
+        EnsureDecision.Reason decision = EnsureDecision.decide(
+                new EnsureDecision.Inputs(true, true, true, devSettingsOn, adbOn));
+        try {
+            if (!devSettingsOn && !Settings.Global.putInt(cr, KEY_DEV_SETTINGS, 1)) {
+                throw new SecurityException("putInt(" + KEY_DEV_SETTINGS + ") was refused");
+            }
             if (!devSettingsOn) {
-                Settings.Global.putInt(cr, KEY_DEV_SETTINGS, 1);
                 Log.i(TAG, "enabled developer settings");
             }
             if (decision == EnsureDecision.Reason.CHANGED) {
-                Settings.Global.putInt(cr, KEY_ADB_WIFI, 1);
+                if (!Settings.Global.putInt(cr, KEY_ADB_WIFI, 1)) {
+                    throw new SecurityException("putInt(" + KEY_ADB_WIFI + ") was refused");
+                }
                 quietUntil = SystemClock.elapsedRealtime() + QUIET_MS;
                 Log.i(TAG, "enabled wireless debugging");
             } else {
@@ -100,8 +115,19 @@ public final class Ensurer {
             }
             return record(c, reason, decision);
         } catch (Exception e) {
-            Log.e(TAG, "ensure failed", e);
-            return record(c, reason, EnsureDecision.Reason.FAILED, "Error: " + e);
+            Log.e(TAG, "ensure: settings write refused", e);
+            return record(c, reason, EnsureDecision.Reason.SETTINGS_REFUSED,
+                    "settings write refused: " + e);
+        }
+    }
+
+    /** The remembered SSID, for the no-Wi-Fi reason; prefs may be locked. */
+    private static String rememberedSsid(Context c) {
+        try {
+            String ssid = LocalWifi.ssid(c);
+            return ssid == null || ssid.isEmpty() ? "(none saved)" : ssid;
+        } catch (Exception e) {
+            return "unavailable (" + e + ")";
         }
     }
 

@@ -4,6 +4,7 @@ import android.content.Context;
 
 import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
+import java.io.File;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.nio.charset.Charset;
@@ -53,6 +54,7 @@ public final class Pairing {
     public static String pair(Context context, String rawCode) {
         String code = rawCode == null ? "" : rawCode.replaceAll("\\s", "");
         if (!code.matches("\\d{6}")) {
+            Diag.warn(context, "key.pair_invalid_code", "the pairing code is not 6 digits");
             return "Enter the 6-digit code shown in Developer options";
         }
         final AtomicReference<Closeable> live = new AtomicReference<>();
@@ -60,7 +62,7 @@ public final class Pairing {
             Endpoint endpoint = discover(context, AdbMdns.SERVICE_TYPE_TLS_PAIRING,
                     "Wireless debugging is not showing a pairing code. Open Developer options, "
                             + "tap \"Pair device with pairing code\", then try again.");
-            final PrivateKey privateKey = AdbIdentity.load(context).privateKey();
+            final PrivateKey privateKey = loadKey(context);
             final X509Certificate certificate = AdbCertificate.loadOrCreate(context);
 
             within(PAIR_MS, live, new Attempt<Void>() {
@@ -78,10 +80,13 @@ public final class Pairing {
                     return null;
                 }
             });
+            Diag.info(context, "key.pair_ok", "the phone trusts the app's ADB key");
             return "Paired. The app's key is now trusted by this phone.";
         } catch (TimeoutException e) {
+            Diag.warn(context, "key.pair_timeout", noAnswer(PAIR_MS));
             return "Pairing timed out: " + noAnswer(PAIR_MS) + ".";
         } catch (Exception e) {
+            Diag.error(context, "key.pair_failed", message(e));
             return "Pairing failed: " + message(e);
         }
     }
@@ -96,7 +101,7 @@ public final class Pairing {
         try {
             Endpoint endpoint = discover(context, AdbMdns.SERVICE_TYPE_TLS_CONNECT,
                     "Wireless debugging is off. Turn it on in Developer options, then try again.");
-            final PrivateKey privateKey = AdbIdentity.load(context).privateKey();
+            final PrivateKey privateKey = loadKey(context);
             final X509Certificate certificate = AdbCertificate.loadOrCreate(context);
 
             return within(VERIFY_MS, live, new Attempt<String>() {
@@ -121,19 +126,25 @@ public final class Pairing {
                             out.write(buffer, 0, n);
                         }
                         String reply = new String(out.toByteArray(), Charset.forName("UTF-8")).trim();
-                        return reply.isEmpty()
+                        String text = reply.isEmpty()
                                 ? "Connected, but the shell said nothing back."
                                 : "Connected as " + reply;
+                        Diag.info(context, "key.verify_ok", text);
+                        return text;
                     } finally {
                         connection.close();
                     }
                 }
             });
         } catch (TimeoutException e) {
+            Diag.warn(context, "key.verify_timeout", noAnswer(VERIFY_MS));
             return "No connection yet: " + noAnswer(VERIFY_MS) + ".";
         } catch (AdbAuthenticationFailedException e) {
+            Diag.warn(context, "key.verify_untrusted",
+                    "the phone does not trust this app's key; pair again");
             return "No connection yet: the phone does not trust this app's key - pair again.";
         } catch (Exception e) {
+            Diag.error(context, "key.verify_failed", message(e));
             return "No connection yet: " + message(e);
         }
     }
@@ -167,6 +178,17 @@ public final class Pairing {
         } finally {
             executor.shutdownNow();
         }
+    }
+
+    /** The app key; a missing file is the documented reset, so say so. */
+    private static PrivateKey loadKey(Context context) throws IOException {
+        boolean existed = new File(AdbIdentity.dir(context), AdbIdentity.KEY_FILE).isFile();
+        PrivateKey key = AdbIdentity.load(context).privateKey();
+        if (!existed) {
+            Diag.info(context, "key.created", "no ADB key found; generated a new one;"
+                    + " pair this app again");
+        }
+        return key;
     }
 
     private interface Attempt<T> {

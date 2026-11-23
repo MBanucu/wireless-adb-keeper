@@ -169,21 +169,19 @@ public final class Diag {
         fields.add(new DiagSnapshot.Field("port_5555", PinnedPort::state));
         fields.add(new DiagSnapshot.Field("pin_result", PinnedPort::result));
         fields.add(new DiagSnapshot.Field("wifi_result", WifiRadio::result));
-        fields.add(new DiagSnapshot.Field("termux_installed",
-                () -> String.valueOf(PinnedPort.hasTermux(c))));
-        fields.add(new DiagSnapshot.Field("termux_grant",
-                () -> String.valueOf(PinnedPort.termuxUsable(c))));
         fields.add(new DiagSnapshot.Field("last_result",
                 () -> LocalWifi.detail == null || LocalWifi.detail.isEmpty()
                         ? "none" : LocalWifi.detail));
-        fields.add(new DiagSnapshot.Field("perm_write_secure_settings",
-                () -> permission(c, android.Manifest.permission.WRITE_SECURE_SETTINGS)));
-        fields.add(new DiagSnapshot.Field("perm_location", () -> LocalWifi.supported()
-                ? permission(c, LocalWifi.PERM_LOCATION) : "not needed before Android 10"));
-        fields.add(new DiagSnapshot.Field("perm_notifications",
-                () -> permission(c, "android.permission.POST_NOTIFICATIONS")));
+        fields.addAll(PermissionAudit.fields(new PermissionAudit.Inputs(
+                c.getPackageName(), Build.VERSION.SDK_INT,
+                Ensurer.hasPermission(c), LocalWifi.hasLocationPermission(c),
+                PinnedPort.termuxUsable(c),
+                granted(c, PermissionAudit.POST_NOTIFICATIONS),
+                PinnedPort.hasTermux(c))));
         fields.add(new DiagSnapshot.Field("key_present", () -> String.valueOf(
                 new File(AdbIdentity.dir(c), AdbIdentity.KEY_FILE).isFile())));
+        fields.add(new DiagSnapshot.Field("key_certificate", () -> String.valueOf(
+                new File(AdbIdentity.dir(c), AdbCertificate.CERT_FILE).isFile())));
         fields.add(new DiagSnapshot.Field("journal_events",
                 () -> count(c) + " entries"));
         fields.add(new DiagSnapshot.Field("journal_bytes",
@@ -198,10 +196,9 @@ public final class Diag {
 
     // ---------------------------------------------------------------- internals
 
-    private static String permission(Context c, String name) {
-        if (Build.VERSION.SDK_INT < 23) return "n/a";
-        return c.checkSelfPermission(name) == PackageManager.PERMISSION_GRANTED
-                ? "granted" : "not granted";
+    private static boolean granted(Context c, String name) {
+        if (Build.VERSION.SDK_INT < 23) return false;
+        return c.checkSelfPermission(name) == PackageManager.PERMISSION_GRANTED;
     }
 
     private static boolean unlocked(Context c) {

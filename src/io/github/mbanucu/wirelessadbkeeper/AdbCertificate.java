@@ -81,11 +81,32 @@ public final class AdbCertificate {
         synchronized (AdbCertificate.class) {
             cert = cached;
             if (cert == null || !certifies(cert, key)) {
+                File file = new File(AdbIdentity.dir(c), CERT_FILE);
+                boolean existed = file.isFile();
+                boolean reusable = certifiesFile(file, key);
                 cert = loadOrCreate(AdbIdentity.dir(c), key);
                 cached = cert;
+                if (!existed) {
+                    Diag.info(c, "key.certificate_created",
+                            "created the self-signed certificate beside the ADB key");
+                } else if (!reusable) {
+                    Diag.warn(c, "key.certificate_regenerated",
+                            "the certificate did not match the current ADB key;"
+                                    + " regenerated it, pair again");
+                }
             }
         }
         return cert;
+    }
+
+    /** Whether an existing certificate file belongs to this key. */
+    private static boolean certifiesFile(File file, PrivateKey key) {
+        if (!file.isFile()) return false;
+        try {
+            return read(file).getPublicKey().equals(publicKeyOf(key));
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /** Whether {@code cert} carries the public half of {@code key}. */
