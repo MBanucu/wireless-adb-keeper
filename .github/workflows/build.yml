@@ -31,8 +31,17 @@ jobs:
       # Gradle work runs. ANDROID_HOME is already set on the runner.
       - name: Install the compileSdk platform and build tools
         run: |
-          yes | sdkmanager --licenses > /dev/null
-          sdkmanager --install "platforms;android-35" "build-tools;36.0.0"
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          # cmdline-tools is not on PATH on the runner image, and the versioned
+          # directory name changes with image updates.
+          SDKMANAGER=$(ls -d "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
+          if [ -z "$SDKMANAGER" ]; then
+            echo "no sdkmanager under $SDK/cmdline-tools" >&2
+            exit 1
+          fi
+          echo "using $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null
+          "$SDKMANAGER" --install "platforms;android-35" "build-tools;36.0.0"
 
       # There is no JUnit dependency (it does not resolve offline), so `test` is
       # wired in build.gradle.kts to the device-free IdentityProbe.
