@@ -179,14 +179,26 @@ public class PairActivity extends Activity {
         new Thread(new Runnable() {
             @Override
             public void run() {
-                final String result = task.run();
+                String text;
+                try {
+                    text = task.run();
+                } catch (Throwable t) {
+                    // Library code runs on this thread; an unexpected throw must
+                    // not leave both buttons disabled with no way to retry.
+                    text = "Pairing failed: " + t;
+                }
+                final String result = text;
                 handler.post(new Runnable() {
                     @Override
                     public void run() {
-                        boolean good = result.startsWith("Paired") || result.startsWith("Connected");
-                        show(result, good ? OK : BAD);
-                        pairButton.setEnabled(true);
-                        verifyButton.setEnabled(true);
+                        try {
+                            boolean good = result.startsWith("Paired")
+                                    || result.startsWith("Connected");
+                            show(result, good ? OK : BAD);
+                        } finally {
+                            pairButton.setEnabled(true);
+                            verifyButton.setEnabled(true);
+                        }
                     }
                 });
             }
