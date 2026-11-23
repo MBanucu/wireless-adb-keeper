@@ -1,4 +1,4 @@
-package com.example.wifidebug;
+package io.github.mbanucu.wirelessadbkeeper;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -22,8 +22,8 @@ import android.util.Log;
 
 public class MonitorService extends Service {
     public static volatile boolean running = false;
-    public static final String ACTION_CONNECT_LOCAL = "com.example.wifidebug.CONNECT_LOCAL";
-    public static final String ACTION_RELOAD_LOCAL = "com.example.wifidebug.RELOAD_LOCAL";
+    public static final String ACTION_CONNECT_LOCAL = "io.github.mbanucu.wirelessadbkeeper.CONNECT_LOCAL";
+    public static final String ACTION_RELOAD_LOCAL = "io.github.mbanucu.wirelessadbkeeper.RELOAD_LOCAL";
     private static final String CHANNEL_ID = "monitor";
     private static final int NOTIFICATION_ID = 1;
 

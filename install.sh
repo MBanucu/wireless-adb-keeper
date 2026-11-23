@@ -16,7 +16,7 @@ set -uo pipefail
 
 APK=${1:-build/wifidebug.apk}
 SERIAL=${PHONE_SERIAL:-}
-PKG=com.example.wifidebug
+PKG=io.github.mbanucu.wirelessadbkeeper
 
 [ -f "$APK" ] || { echo "no APK at $APK; build first (see README)" >&2; exit 1; }
 

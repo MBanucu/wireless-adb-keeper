@@ -1,4 +1,4 @@
-package com.example.wifidebug;
+package io.github.mbanucu.wirelessadbkeeper;
 
 import android.app.job.JobParameters;
 import android.app.job.JobService;

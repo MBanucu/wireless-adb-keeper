@@ -25,7 +25,9 @@ Neither half can be solved by the app alone:
 
 ## Components
 
-**App (`src/`)** — `com.example.wifidebug`, targetSdk 28, built on device.
+**App (`src/`)** — `io.github.mbanucu.wirelessadbkeeper`, targetSdk 35, built on device.
+The name says whose app it is: `com.example` is the placeholder the docs reserve for
+samples and cannot be published, so it is the GitHub-handle form instead.
 
 - `MonitorService` — foreground service; watches Wi-Fi via `NetworkCallback`, watches the
   secure setting via `ContentObserver`, and re-enables wireless debugging when needed.
@@ -38,6 +40,8 @@ Neither half can be solved by the app alone:
 - `LocalWifi` — optional local-only mode using `WifiNetworkSpecifier`. This can never be
   silent: Android shows a dialog and requires the passphrase on every reconnect.
   Kept as a non-default mode.
+- `ControlProvider` — the adb command surface: the same actions the buttons run,
+  reachable with `adb shell content call` and readable through `keeper.sh`.
 - `PinnedPort` — probes `127.0.0.1:5555` every minute and, when nothing listens, asks
   Termux to run `pin-adb-port.sh` through Termux's own `RUN_COMMAND` API. All the
   decisions (when to ask, how often, whether Termux is usable) live here.
@@ -53,6 +57,8 @@ Neither half can be solved by the app alone:
   TCP scan of 30000–50000. Single instance, wake lock held, rotating log.
 - `pin-adb-port.sh` — attaches to adbd (a serial the keepalive already holds, then
   mDNS, then a scan) and sends `adb tcpip 5555`. Run by the app, not by hand.
+- `keeper.sh` — laptop/Termux-side wrapper that maps friendly command names onto the
+  app's content provider, and prints the `key=value` reply.
 - `wifi-on.sh` — turns the Wi-Fi radio on with `svc wifi enable` over Termux's adb,
   which keeps working with the radio off because it goes through loopback. Run by the
   app's **Turn Wi-Fi on** button.
@@ -123,10 +129,10 @@ silently drops them:
 
 ```bash
 adb install -r wifidebug.apk
-adb shell pm grant com.example.wifidebug android.permission.WRITE_SECURE_SETTINGS
-adb shell pm grant com.example.wifidebug android.permission.ACCESS_FINE_LOCATION
-adb shell pm grant com.example.wifidebug android.permission.POST_NOTIFICATIONS
-adb shell pm grant com.example.wifidebug com.termux.permission.RUN_COMMAND
+adb shell pm grant io.github.mbanucu.wirelessadbkeeper android.permission.WRITE_SECURE_SETTINGS
+adb shell pm grant io.github.mbanucu.wirelessadbkeeper android.permission.ACCESS_FINE_LOCATION
+adb shell pm grant io.github.mbanucu.wirelessadbkeeper android.permission.POST_NOTIFICATIONS
+adb shell pm grant io.github.mbanucu.wirelessadbkeeper com.termux.permission.RUN_COMMAND
 ```
 
 The `RUN_COMMAND` grant is needed for the fixed port and for the **Turn Wi-Fi on**
@@ -149,6 +155,38 @@ Open the app, enter the Wi-Fi SSID and password, tap **Save**, then **Connect no
 approve the "available networks" notification once. Leave **Connect mode** on
 `auto-connect`.
 
+## Control from adb
+
+Every action is also a shell command, so the app never needs to be tapped.
+`keeper.sh` wraps the raw call; `content call` starts the app even when it was
+force-stopped or only just installed, which a broadcast cannot do.
+
+```bash
+./keeper.sh status            # the Status page as key=value lines
+./keeper.sh enable            # Enable now
+./keeper.sh wifi-on           # Turn Wi-Fi on
+./keeper.sh start | stop      # monitor service
+./keeper.sh connect           # Connect now
+./keeper.sh mode auto|local   # Connect mode
+./keeper.sh save SSID [PASS]  # Save SSID and password
+./keeper.sh pin               # Pin adb port 5555 now
+./keeper.sh schedule          # 15-minute keep-alive job
+```
+
+Without the wrapper, the same thing by hand:
+
+```bash
+adb shell content call --uri content://io.github.mbanucu.wirelessadbkeeper.control \
+    --method status
+```
+
+The provider is exported, but it checks the caller's uid, so only adb shell, root,
+system and the app itself get through; an ordinary installed app cannot switch Wi-Fi
+or stop the monitor. Errors come back as `code=400, data=error=...`; `keeper.sh`
+strips the envelope. `start` is the one command that does not use the provider:
+Android 12+ refuses to let a background app start its own foreground service, so the
+shell starts it with `am start-foreground-service` instead.
+
 ## Fixed port 5555
 
 `adb` is told to listen on a fixed port, so a script on the other side does not have to
@@ -166,7 +204,7 @@ Requirements:
 - Termux from F-Droid/GitHub with `allow-external-apps=true` and a working `adb`.
 - This checkout **at `~/wireless-adb-keeper`** in Termux — that is the path the app
   calls. (`PinnedPort.SCRIPT` is the one place to change if it lives elsewhere.)
-- `pm grant com.example.wifidebug com.termux.permission.RUN_COMMAND`, and an APK whose
+- `pm grant io.github.mbanucu.wirelessadbkeeper com.termux.permission.RUN_COMMAND`, and an APK whose
   manifest declares it (1.6+).
 - The `INTERNET` permission. Not for the network as such: without it Android refuses
   even a loopback `socket()`, which made the watchdog report the port as closed while it

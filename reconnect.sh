@@ -48,7 +48,7 @@ PY
 if [ -z "$PORTS" ]; then
     echo "no listening port found in range"
     echo "hint: enable wireless debugging, or run:"
-    echo "  am broadcast -a com.example.wifidebug.ENSURE -n com.example.wifidebug/.EnsureReceiver"
+    echo "  am broadcast -a io.github.mbanucu.wirelessadbkeeper.ENSURE -n io.github.mbanucu.wirelessadbkeeper/.EnsureReceiver"
     exit 1
 fi
 

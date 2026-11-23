@@ -1,4 +1,4 @@
-package com.example.wifidebug;
+package io.github.mbanucu.wirelessadbkeeper;
 
 import android.app.Activity;
 import android.app.job.JobInfo;
@@ -364,7 +364,7 @@ public class MainActivity extends Activity {
 
         root.addView(sectionLabel("How it works"));
         TextView help = text("One-time setup (already done if the status shows permission granted):\n\n"
-                + "adb shell pm grant com.example.wifidebug android.permission.WRITE_SECURE_SETTINGS\n\n"
+                + "adb shell pm grant io.github.mbanucu.wirelessadbkeeper android.permission.WRITE_SECURE_SETTINGS\n\n"
                 + "How it works:\n"
                 + "- A foreground service watches for new Wi-Fi connections and re-enables wireless debugging immediately.\n"
                 + "- It also notices if wireless debugging is turned off while Wi-Fi is connected.\n"
@@ -376,7 +376,7 @@ public class MainActivity extends Activity {
                 + "- The fixed port 5555 is kept by Termux's own adb, which is already paired with this "
                 + "phone: when the port is closed the app asks Termux to run "
                 + "wireless-adb-keeper/pin-adb-port.sh, which sends 'adb tcpip 5555'. An app cannot "
-                + "send that command itself. One-time grant: pm grant com.example.wifidebug "
+                + "send that command itself. One-time grant: pm grant io.github.mbanucu.wirelessadbkeeper "
                 + "com.termux.permission.RUN_COMMAND\n"
                 + "- Only devices already paired with this phone can connect. "
                 + "Revoke pairings in Developer options if needed.", 12, MUTED);
