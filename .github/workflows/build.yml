@@ -25,11 +25,14 @@ jobs:
           java-version: "17"
           cache: gradle
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
+      # The ubuntu image ships the Android SDK and cmdline-tools, so there is no
+      # setup action: android-actions/setup-android still asks sdkmanager for a
+      # "tools" package that no longer exists, which fails the job before any
+      # Gradle work runs. ANDROID_HOME is already set on the runner.
       - name: Install the compileSdk platform and build tools
-        run: sdkmanager --install "platforms;android-35" "build-tools;36.0.0"
+        run: |
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager --install "platforms;android-35" "build-tools;36.0.0"
 
       # There is no JUnit dependency (it does not resolve offline), so `test` is
       # wired in build.gradle.kts to the device-free IdentityProbe.
