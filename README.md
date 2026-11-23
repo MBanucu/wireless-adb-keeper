@@ -177,7 +177,8 @@ app's `android.jar`, so neither needs a hand-written `javac` line:
 ./gradlew probeUnit   # the tests/unit suites, no device, no JUnit
 ./gradlew probe       # probeUnit plus TokenProbe, ResultProbe and the scripts
 ./gradlew probeResult # TermuxResult: the RESULT-line parser, no device
-./gradlew probeScripts # pin-adb-port.sh, wait_adb.sh, wifi-on.sh, pair-local.sh with a fake adb
+./gradlew probeScripts # the scripts and tests/device.sh with a fake adb
+./gradlew probeDeviceTooling # tests/device.sh: flags, recording, artifacts, restore
 ./gradlew probeAdb    # AdbProbe: needs a phone with adbd on 127.0.0.1:5555
 ./gradlew probeAdb -PadbKey=$HOME/.android/adbkey -PadbPort=5555 -PadbPinPort=5555
 ./gradlew probeAdb -PadbTcpip=true   # also sends `tcpip:5555` and times the re-pin
@@ -185,7 +186,10 @@ app's `android.jar`, so neither needs a hand-written `javac` line:
 
 On a phone with the debuggable Gradle build installed, `bash tests/device.sh`
 runs the on-device suites over `keeper.sh` with a state snapshot and restore;
-see [`tests/README.md`](tests/README.md#the-device-suite). It is not part of CI.
+`--record` adds an optional `adb-harness` video and `--list` needs no device.
+The device run itself is not part of CI; its device-free contracts (flags,
+recording, artifacts, restore) are checked by `probeDeviceTooling`. See
+[`tests/README.md`](tests/README.md#the-device-suite).
 
 `probe` runs only what can run without a phone; `test` and `check` depend on it.
 `probeAdb` stays manual and is never part of CI. There is deliberately no JUnit

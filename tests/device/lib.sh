@@ -34,6 +34,21 @@ export DEVICE_ROOT
 : "${DEVICE_STATE:?DEVICE_STATE must name the runner snapshot directory}"
 DEVICE_PID=${DEVICE_PID:-$$}
 DEVICE_PORT=${DEVICE_PORT:-5555}
+# A quiet run still prints failures and the summary; only the per-check `ok`
+# lines and the named skips are silent.
+DEVICE_QUIET=${DEVICE_QUIET:-0}
+# Per-run evidence: a uiautomator dump and a screenshot of every failed check.
+DEVICE_ARTIFACTS=${DEVICE_ARTIFACTS:-}
+DEVICE_UI_DUMP=${DEVICE_UI_DUMP:-/sdcard/wak-ui.xml}
+# Setup may heal an empty `adb devices` only when asked, and every attempt is
+# logged. Off by default: a reachability check must not be healed silently.
+DEVICE_AUTOHEAL=${DEVICE_AUTOHEAL:-0}
+DEVICE_RECONNECT_MAX=${DEVICE_RECONNECT_MAX:-3}
+DEVICE_RECONNECT_DELAY=${DEVICE_RECONNECT_DELAY:-1}
+DEVICE_RECONNECT_LOG=${DEVICE_RECONNECT_LOG:-}
+DEVICE_SETUP_RECONNECT_MS=${DEVICE_SETUP_RECONNECT_MS:-0}
+DEVICE_RECONNECT_ATTEMPTS=${DEVICE_RECONNECT_ATTEMPTS:-0}
+BLOCKED=3
 
 LAST_COMMAND=
 SKIPPED=${SKIPPED:-0}
@@ -54,6 +69,109 @@ dev_adb() {
     else
         "$ADB" "$@"
     fi
+}
+
+# ------------------------------------------------------------ reconnect policy
+
+# One place answers "is adb attached": every setup and reachability check uses
+# it, so an empty `adb devices` cannot be mistaken for a working target.
+adb_online() {
+    local state
+    if [ -n "$PHONE_SERIAL" ]; then
+        _last "adb -s $PHONE_SERIAL get-state"
+    else
+        _last "adb get-state"
+    fi
+    state=$(dev_adb get-state 2>/dev/null || true)
+    [ "$(printf '%s\n' "$state" | tr -d '\r' | tail -n 1)" = device ]
+}
+
+# The log is on disk because setup runs before a suite subshell exists and a
+# suite has to be able to print the attempts setup made. A path under the
+# artifact directory survives the run; a bare /tmp one is a last resort.
+_reconnect_log() {
+    local line=$1 file=${DEVICE_RECONNECT_LOG:-${TMPDIR:-/tmp}/wak-reconnect.$$.log}
+    if [ -n "$DEVICE_RECONNECT_LOG" ]; then
+        mkdir -p "$(dirname -- "$DEVICE_RECONNECT_LOG")" 2>/dev/null || true
+    fi
+    printf '%s\n' "$line" >> "$file" 2>/dev/null || true
+    printf 'reconnect: %s\n' "$line"
+}
+
+reconnect_report() {
+    local file=${DEVICE_RECONNECT_LOG:-${TMPDIR:-/tmp}/wak-reconnect.$$.log}
+    [ -f "$file" ] || { printf 'reconnect: no attempts logged\n'; return 0; }
+    sed 's/^/reconnect: /' "$file"
+}
+
+# One attempt, named on stdout before it runs. `adb-connect` is used when it is
+# installed because it finds a new wireless-debugging port; `adb reconnect` is
+# the fallback for a target that is listed but offline. `adb-watch` is a
+# long-running daemon and is deliberately not started by a timed check.
+reconnect_once() {
+    local out rc connect=${ADB_CONNECT:-adb-connect}
+    if command -v "$connect" >/dev/null 2>&1; then
+        if [ -n "$PHONE_SERIAL" ]; then
+            if out=$("$connect" --serial "$PHONE_SERIAL" --quiet 2>&1); then
+                rc=0
+            else
+                rc=$?
+            fi
+        else
+            if out=$("$connect" --quiet 2>&1); then
+                rc=0
+            else
+                rc=$?
+            fi
+        fi
+        _reconnect_log "attempt via $connect exited $rc${out:+: $(printf '%s' "$out" | tr '\n' ' ')}"
+    else
+        if out=$(dev_adb reconnect 2>&1); then
+            rc=0
+        else
+            rc=$?
+        fi
+        _reconnect_log "attempt via adb reconnect exited $rc${out:+: $(printf '%s' "$out" | tr '\n' ' ')}"
+    fi
+    return "$rc"
+}
+
+# At most N attempts, each one logged before it runs. Off unless the runner was
+# started with --connect (DEVICE_AUTOHEAL=1). Returns 1 without touching the
+# device when auto-heal is disabled, which is what a reachability check wants.
+reconnect_ensure() {
+    local max=${1:-$DEVICE_RECONNECT_MAX} i=0 connect=${ADB_CONNECT:-adb-connect} version
+    if adb_online; then
+        return 0
+    fi
+    if [ "$DEVICE_AUTOHEAL" != 1 ]; then
+        _reconnect_log "not attempting: auto-heal is off (pass --connect to enable it)"
+        return 1
+    fi
+    if command -v "$connect" >/dev/null 2>&1; then
+        version=$("$connect" --version 2>/dev/null | head -n 1 || true)
+        _reconnect_log "using $connect${version:+ ($version)}"
+    fi
+    while [ "$i" -lt "$max" ]; do
+        i=$((i + 1))
+        _reconnect_log "attempt $i/$max at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        reconnect_once || true
+        if adb_online; then
+            _reconnect_log "online after attempt $i/$max"
+            return 0
+        fi
+        [ "$i" -lt "$max" ] && sleep "$DEVICE_RECONNECT_DELAY"
+    done
+    _reconnect_log "still offline after $max attempt(s)"
+    return 1
+}
+
+# A suite that measures reachability calls this first. It records the policy so
+# the output can explain why nothing was healed.
+autoheal_off() {
+    DEVICE_AUTOHEAL=0
+    [ "$DEVICE_QUIET" = 1 ] || printf 'reach: auto-heal disabled for this check\n'
+    return 0
 }
 
 # The wrapper is the documented interface; tests never call `content` directly
@@ -186,16 +304,149 @@ wait_for_port() {
     done
 }
 
+# ------------------------------------------------------------- semantic UI
+
+# Tier 1 has no accessibility APK: `uiautomator dump` writes an XML tree on the
+# device and the helpers below read text out of it. A check names a string, never
+# a coordinate, so a layout change is a failure of the check, not of the test.
+ui_dump() {
+    local out
+    _last "uiautomator dump $DEVICE_UI_DUMP"
+    out=$(dev_adb shell uiautomator dump "$DEVICE_UI_DUMP" 2>&1) || {
+        printf 'uiautomator dump failed: %s\n' "$out" >&2
+        return 1
+    }
+    case $out in
+        *'dumped to'*|*'UI hierchary dumped'*) ;;
+        *) printf 'uiautomator dump said: %s\n' "$out" >&2 ;;
+    esac
+    dev_adb exec-out cat "$DEVICE_UI_DUMP" 2>/dev/null
+}
+
+# One node per line, so grep and the assertions do not depend on the dump being
+# pretty-printed (it is one long line on most releases).
+ui_nodes() {
+    sed 's/>/>\n/g' | sed -n '/^<node /p'
+}
+
+# Every node whose attributes contain the text, or the accessibility label. The
+# caller gets the line; it does not parse a rectangle.
+ui_find() {
+    local needle=$1 xml=${2-}
+    [ -n "$needle" ] || return 1
+    if [ -z "$xml" ]; then
+        xml=$(ui_dump) || return 1
+    fi
+    printf '%s' "$xml" | ui_nodes | grep -F -- "$needle"
+}
+
+# The visible text and content descriptions, one per line, for a failure message
+# short enough to read.
+ui_text() {
+    local xml=${1-}
+    if [ -z "$xml" ]; then
+        xml=$(ui_dump) || return 1
+    fi
+    printf '%s' "$xml" | ui_nodes \
+        | grep -o -e 'text="[^"]*"' -e 'content-desc="[^"]*"' \
+        | sed -e 's/^[a-z-]*="//' -e 's/"$//' \
+        | grep -v '^$' || true
+}
+
+# The centre of a node found by its text. Coordinates are derived here, not
+# written in a suite; the deferred tier-3 a11y probe would avoid them entirely.
+ui_tap() {
+    local needle=$1 node bounds x1 y1 x2 y2
+    node=$(ui_find "$needle") || return 1
+    bounds=$(printf '%s' "$node" \
+        | sed -n 's/.*bounds="\[\([-0-9]*\),\([-0-9]*\)\]\[\([-0-9]*\),\([-0-9]*\)\]".*/\1 \2 \3 \4/p' \
+        | head -n 1)
+    [ -n "$bounds" ] || return 1
+    read -r x1 y1 x2 y2 <<< "$bounds"
+    _last "input tap $(( (x1 + x2) / 2 )) $(( (y1 + y2) / 2 ))"
+    dev_adb shell input tap "$(( (x1 + x2) / 2 ))" "$(( (y1 + y2) / 2 ))"
+}
+
+assert_ui_contains() {
+    local what=$1 needle=$2 xml found
+    if ! xml=$(ui_dump); then
+        _assert_fail "$what" "a uiautomator dump" "uiautomator dump failed"
+    fi
+    found=$(printf '%s' "$xml" | ui_nodes | grep -F -- "$needle" || true)
+    if [ -n "$found" ]; then
+        ok_line "$what"
+    else
+        _assert_fail "$what" "the UI contains <$needle>" "$(printf '%s' "$xml" | ui_text)"
+    fi
+}
+
+assert_ui_absent() {
+    local what=$1 needle=$2 xml found
+    if ! xml=$(ui_dump); then
+        _assert_fail "$what" "a uiautomator dump" "uiautomator dump failed"
+    fi
+    found=$(printf '%s' "$xml" | ui_nodes | grep -F -- "$needle" || true)
+    if [ -n "$found" ]; then
+        _assert_fail "$what" "the UI does not contain <$needle>" "$(printf '%s' "$xml" | ui_text)"
+    else
+        ok_line "$what"
+    fi
+}
+
+# ------------------------------------------------------------- failure evidence
+
+_artifact_name() {
+    printf '%s' "$1" \
+        | tr -c 'A-Za-z0-9._-' '-' \
+        | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//' \
+        | cut -c 1-80
+}
+
+# A failing check leaves what the device showed. A screenshot needs no extra app
+# and a dump is the same tree tier 1 asserts on, so the artifact explains the
+# failure without a recording being installed.
+artifact_failure() {
+    local label=${1:-failure} base dir
+    [ -n "$DEVICE_ARTIFACTS" ] || {
+        printf '  artifacts: none (DEVICE_ARTIFACTS is unset)\n'
+        return 0
+    }
+    mkdir -p "$DEVICE_ARTIFACTS" 2>/dev/null || {
+        printf '  artifacts: could not create %s\n' "$DEVICE_ARTIFACTS"
+        return 0
+    }
+    base=$(_artifact_name "$label")
+    dir=$DEVICE_ARTIFACTS
+    if ui_dump > "$dir/$base.ui.xml" 2> "$dir/$base.ui.err"; then
+        [ -s "$dir/$base.ui.err" ] || rm -f "$dir/$base.ui.err"
+    else
+        rm -f "$dir/$base.ui.xml"
+    fi
+    if dev_adb exec-out screencap -p > "$dir/$base.png" 2> "$dir/$base.png.err"; then
+        [ -s "$dir/$base.png" ] || rm -f "$dir/$base.png"
+        [ -s "$dir/$base.png.err" ] || rm -f "$dir/$base.png.err"
+    else
+        rm -f "$dir/$base.png"
+    fi
+    printf '  artifacts: %s\n' "$dir"
+    [ -f "$dir/$base.ui.xml" ] && printf '    ui: %s\n' "$dir/$base.ui.xml"
+    [ -f "$dir/$base.png" ] && printf '    screenshot: %s\n' "$dir/$base.png"
+    return 0
+}
+
 # --------------------------------------------------------------- assertions
 
 # A failure must be reproducible from the line above it: the command that
-# produced the value, what was expected, what came back, and the journal tail.
-# `exit` (not `return`) fails the suite's subshell, so the runner's state trap
-# still owns the parent.
+# produced the value, what was expected, what came back, the journal tail, and
+# the evidence this run saved. `exit` (not `return`) fails the suite's subshell,
+# so the runner's state trap still owns the parent.
 _assert_fail() {
-    local what=$1 expected=$2 actual=$3 tail command
+    local what=$1 expected=$2 actual=$3 tail command suite
     command=$(cat "$DEVICE_STATE/last-command" 2>/dev/null || true)
+    suite=${DEVICE_SUITE_NAME:-unknown}
     printf 'FAIL %s\n' "$what"
+    printf '  suite: %s\n' "$suite"
+    printf '  time: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf '  command: %s\n' "${command:-${LAST_COMMAND:-$what}}"
     printf '  expected:\n'
     printf '%s\n' "$expected" | sed 's/^/    /'
@@ -208,13 +459,20 @@ _assert_fail() {
     else
         printf '    (empty or unavailable)\n'
     fi
+    artifact_failure "$suite-$what"
     exit 1
+}
+
+# The one `ok` line every assertion prints, and the one place a quiet run can
+# silence it without touching the verdict.
+ok_line() {
+    [ "$DEVICE_QUIET" = 1 ] || printf 'ok   %s\n' "$1"
 }
 
 assert_eq() {
     local what=$1 expected=$2 actual=$3
     if [ "$expected" = "$actual" ]; then
-        printf 'ok   %s\n' "$what"
+        ok_line "$what"
     else
         _assert_fail "$what" "$expected" "$actual"
     fi
@@ -223,7 +481,7 @@ assert_eq() {
 assert_contains() {
     local what=$1 needle=$2 haystack=$3
     case $haystack in
-        *"$needle"*) printf 'ok   %s\n' "$what" ;;
+        *"$needle"*) ok_line "$what" ;;
         *) _assert_fail "$what" "contains <$needle>" "$haystack" ;;
     esac
 }
@@ -232,7 +490,7 @@ assert_not_contains() {
     local what=$1 needle=$2 haystack=$3
     case $haystack in
         *"$needle"*) _assert_fail "$what" "does not contain <$needle>" "$haystack" ;;
-        *) printf 'ok   %s\n' "$what" ;;
+        *) ok_line "$what" ;;
     esac
 }
 
@@ -246,7 +504,7 @@ assert_count() {
     count=$({ printf '%s' "$haystack" | grep -o -F -- "$needle" || true; } | wc -l)
     count=$((count))
     if [ "$count" -eq "$expected" ]; then
-        printf 'ok   %s\n' "$what"
+        ok_line "$what"
     else
         _assert_fail "$what" "$expected" "$count"
     fi
@@ -255,12 +513,27 @@ assert_count() {
 # A named reason is a skip, not a pass: the suite's output says so and the
 # runner still reserves exit 0 for checks that actually ran.
 skip() {
-    printf 'skip %s: %s\n' "$1" "$2"
     SKIPPED=$((SKIPPED + 1))
+    [ "$DEVICE_QUIET" = 1 ] || printf 'skip %s: %s\n' "$1" "$2"
 }
 
+# A suite that cannot do anything at all exits 3, the runner's "blocked" code.
+# It is deliberately not 0: a missing tool or an unknown permission state is a
+# result nobody should read as green.
+blocked() {
+    printf 'skip %s: %s\n' "$1" "$2"
+    exit "$BLOCKED"
+}
+
+# The test-timings line (`<class>#<test> <ms>ms <passed|failed>`). A blocked
+# suite is written as `failed`, because `skipped` is not a status the timing
+# gate parses and a skipped suite must never be counted as a pass.
 timing() {
     local name=$1 ms=$2 status=$3
+    case $status in
+        passed|failed) ;;
+        *) status=failed ;;
+    esac
     printf 'timing: tests/device/%s.sh#main %sms %s\n' "$name" "$ms" "$status"
 }
 

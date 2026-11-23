@@ -47,7 +47,7 @@ assert_permission() {
 original=$(permission_state "$(dump)" "$PERM")
 if [ "$original" = unknown ]; then
     skip "location permission" "dumpsys package does not report $PERM"
-    exit 4
+    exit "$BLOCKED"
 fi
 ensure_service
 
@@ -55,23 +55,23 @@ out=
 if [ "$original" = granted ]; then
     if ! out=$(pm_revoke "$PERM" 2>&1); then
         skip "revoke $PERM" "pm refused: $out"
-        exit 4
+        exit "$BLOCKED"
     fi
     assert_permission denied
     if ! out=$(pm_grant "$PERM" 2>&1); then
         skip "grant $PERM" "pm refused: $out"
-        exit 4
+        exit "$BLOCKED"
     fi
     assert_permission granted
 else
     if ! out=$(pm_grant "$PERM" 2>&1); then
         skip "grant $PERM" "pm refused: $out"
-        exit 4
+        exit "$BLOCKED"
     fi
     assert_permission granted
     if ! out=$(pm_revoke "$PERM" 2>&1); then
         skip "revoke $PERM" "pm refused: $out"
-        exit 4
+        exit "$BLOCKED"
     fi
     assert_permission denied
 fi
