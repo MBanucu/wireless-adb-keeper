@@ -58,9 +58,10 @@ samples and cannot be published, so it is the GitHub-handle form instead.
   first: the pinned port 5555, the previous port, the port advertised over mDNS, then a
   TCP scan of the kernel's ephemeral range (32768–60999 when
   `/proc/sys/net/ipv4/ip_local_port_range` is readable, which it is not from Termux).
-  Single instance, wake lock held, rotating log.
+  Single instance, wake lock held while running and released on exit, rotating log.
 - `pin-adb-port.sh` — attaches to adbd (a serial the keepalive already holds, then
-  mDNS, then a scan) and sends `adb tcpip 5555`. Run by the app, not by hand.
+  mDNS, then the phone's TCP table or a scan) and sends `adb tcpip 5555`. Run by the
+  app, not by hand.
 - `keeper.sh` — laptop/Termux-side wrapper that maps friendly command names onto the
   app's content provider, and prints the `key=value` reply.
 - `wifi-on.sh` — turns the Wi-Fi radio on with `svc wifi enable` over Termux's adb,
@@ -72,8 +73,10 @@ samples and cannot be published, so it is the GitHub-handle form instead.
   Needs `pip install zeroconf`; without it the keepalive falls back to scanning.
 - `reconnect.sh` / `wait_adb.sh` — one-shot reconnect and a bounded "wait for adbd to
   appear" helper, useful after rebooting the phone. Both try the pinned port first.
-- `discover.sh` — shared port range and pinned-port default, sourced by the scripts so
-  they cannot drift apart again.
+- `discover.sh` / `scan_ports.py` — the one discovery implementation: shared port
+  range, pinned-port default, mDNS, the phone's `/proc/net/tcp` table, the loopback
+  scan, and connect-and-verify. Sourced by the other scripts so they cannot drift
+  apart again.
 - Reboot/unlock and the autostart toggler live in the sibling `phone-link-tools`
   repository: `reboot.sh` waits for the new boot, `unlock.sh` clears the keyguard.
 
@@ -225,8 +228,8 @@ them executable:
 
 ```bash
 mkdir -p ~/wireless-adb-keeper
-cp pin-adb-port.sh wifi-on.sh discover.sh ~/wireless-adb-keeper/
-chmod +x ~/wireless-adb-keeper/*.sh
+cp pin-adb-port.sh wifi-on.sh discover.sh scan_ports.py adb-mdns.py ~/wireless-adb-keeper/
+chmod +x ~/wireless-adb-keeper/*.sh ~/wireless-adb-keeper/*.py
 ```
 
 Open the app, enter the Wi-Fi SSID and password (both modes need it; open networks need
@@ -322,7 +325,8 @@ The app cannot be that client — neither the client nor the key is available to
 it uses the one the phone already has: **Termux's adb**, which is paired with adbd. When
 `127.0.0.1:5555` stops accepting connections, `PinnedPort` sends a `RUN_COMMAND` intent
 to Termux, Termux runs `pin-adb-port.sh`, and the script attaches to adbd (the serial the
-keepalive already holds, then mDNS, then a scan) and sends `tcpip:5555`.
+keepalive already holds, then mDNS, then the phone's TCP table or a scan) and sends
+`tcpip:5555`.
 
 Requirements:
 
@@ -388,6 +392,12 @@ adb-<device>._adb-tls-connect._tcp.local.  port 32997
 Stale advertisements can outlive the adbd that made them, so the helper only reports
 ports that still accept a TCP connection.
 
+When an adb serial is already attached, `discover.sh` asks the phone instead:
+`adb shell cat /proc/net/tcp /proc/net/tcp6` lists every listening socket (state `0A`,
+local port in hex) in one round trip. That is far cheaper than opening tens of
+thousands of loopback connections, and it falls back to the scan when no serial is
+attached or the tables are empty. The shared scan covers the kernel's ephemeral range and is the last resort.
+
 ## Limitations
 
 - The app cannot reconnect ADB; that is Termux's job (see the table above).
@@ -397,5 +407,6 @@ ports that still accept a TCP connection.
   passphrase unless the network is open or enhanced open (OWE).
 - The TCP scan misses the live port if another scan runs at the same time — hence the
   single-instance guard. Avoid running `reconnect.sh` while the keepalive is scanning.
+  With a serial attached, discovery reads `/proc/net/tcp` instead and no scan races.
 - adbd only listens while a Wi-Fi network is connected; with Wi-Fi off there is nothing
   to connect to.

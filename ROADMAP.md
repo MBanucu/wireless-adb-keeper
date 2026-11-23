@@ -182,7 +182,8 @@ With a trusted key, the app can now do what the scripts did:
   if M3 shows one covers both.
 - Port discovery without Termux: `NsdManager` for `_adb-tls-connect._tcp`, verify the
   port still accepts a connection before trusting it (the stale-advertisement problem
-  `adb-mdns.py` already documents), then fall back to the same 30000–50000 scan.
+  `adb-mdns.py` already documents), then fall back to the same 32768–60999 scan
+  (or the kernel's ephemeral range).
 - `PinnedPort` calls the in-app client to send `tcpip:5555`, keeping its current
   scheduling, quiet window and "probe before asking" logic.
 - Re-pin after reboot against the new TLS port, which is the actual reason the
