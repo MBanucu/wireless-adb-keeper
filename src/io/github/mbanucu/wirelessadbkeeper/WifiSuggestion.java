@@ -6,6 +6,8 @@ import android.net.wifi.WifiNetworkSuggestion;
 import android.os.Build;
 import android.util.Log;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.Collections;
 import java.util.List;
 
@@ -24,7 +26,9 @@ public final class WifiSuggestion {
 
     public static final int STATUS_SUCCESS = 0;
     private static final String PREFS = "wifi_suggestion";
-    private static final String KEY_APPLIED = "applied";
+    private static final String KEY_APPLIED = "applied_sha256";
+    /** Pre-upgrade builds stored `ssid + "\0" + passphrase` under this key. */
+    private static final String KEY_LEGACY_APPLIED = "applied";
 
     private WifiSuggestion() {
     }
@@ -34,6 +38,7 @@ public final class WifiSuggestion {
     }
 
     public static int add(Context c) {
+        dropLegacyApplied(c);
         WifiManager wm = manager(c);
         if (wm == null) return -1;
 
@@ -46,7 +51,7 @@ public final class WifiSuggestion {
 
         // Re-adding an identical suggestion makes Android drop the network for a
         // moment, so only rewrite it when the configuration actually changed.
-        String wanted = ssid + "\u0000" + pass;
+        String wanted = fingerprint(ssid, pass);
         String applied = prefs(c).getString(KEY_APPLIED, "");
         if (wanted.equals(applied) && count(c) > 0) {
             Log.i(Ensurer.TAG, "wifi suggestion already present for " + ssid);
@@ -77,6 +82,7 @@ public final class WifiSuggestion {
     }
 
     public static void remove(Context c) {
+        dropLegacyApplied(c);
         WifiManager wm = manager(c);
         if (wm == null) return;
         prefs(c).edit().remove(KEY_APPLIED).apply();
@@ -120,6 +126,37 @@ public final class WifiSuggestion {
             return Collections.emptyList();
         }
         return Collections.singletonList(suggest(LocalWifi.ssid(c), pass));
+    }
+
+    /**
+     * Identifies the applied credentials without keeping a second copy of the
+     * secret. The SSID plus a SHA-256 of the passphrase is enough to notice a
+     * change; a hash cannot be turned back into the passphrase.
+     */
+    private static String fingerprint(String ssid, String pass) {
+        try {
+            MessageDigest sha = MessageDigest.getInstance("SHA-256");
+            byte[] digest = sha.digest(pass.getBytes(StandardCharsets.UTF_8));
+            return ssid + "\u0000" + Base64Codec.encode(digest);
+        } catch (Exception e) {
+            // SHA-256 always exists on Android; if it somehow does not, fall
+            // back to the SSID alone and let the next pass re-add the network.
+            Log.e(Ensurer.TAG, "wifi suggestion: no SHA-256 for change check", e);
+            return ssid + "\u0000unavailable";
+        }
+    }
+
+    /**
+     * Pre-upgrade builds stored `ssid + "\0" + passphrase` under
+     * {@link #KEY_LEGACY_APPLIED}. Remove that plaintext copy as soon as any
+     * code path touches the suggestion; the suggestion is then re-added once
+     * under the hash-only key.
+     */
+    private static void dropLegacyApplied(Context c) {
+        if (prefs(c).contains(KEY_LEGACY_APPLIED)) {
+            prefs(c).edit().remove(KEY_LEGACY_APPLIED).apply();
+            Log.i(Ensurer.TAG, "wifi suggestion: removed legacy plaintext record");
+        }
     }
 
     private static WifiNetworkSuggestion suggest(String ssid, String pass) {

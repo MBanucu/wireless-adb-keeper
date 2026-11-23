@@ -98,12 +98,13 @@ public final class Keeper {
             return "error=ssid is required";
         }
         LocalWifi.setSsid(c, ssid.trim());
-        if (passphrase != null) {
-            LocalWifi.setPassphrase(c, passphrase);
+        if (passphrase != null && !LocalWifi.setPassphrase(c, passphrase)) {
+            return "error=could not encrypt the passphrase";
         }
         sendServiceAction(c, MonitorService.ACTION_RELOAD_LOCAL);
+        String saved = LocalWifi.passphrase(c);
         return "ssid=" + LocalWifi.ssid(c)
-                + ", passphrase=" + (LocalWifi.passphrase(c).isEmpty() ? "none" : "set");
+                + ", passphrase=" + (saved == null || saved.isEmpty() ? "none" : "set");
     }
 
     /** Sends `adb tcpip 5555` through Termux right now. */

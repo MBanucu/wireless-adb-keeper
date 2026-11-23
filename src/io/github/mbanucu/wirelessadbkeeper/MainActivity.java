@@ -300,9 +300,10 @@ public class MainActivity extends Activity {
         ssidField.setLayoutParams(spaced(matchWrap(), 10));
         root.addView(ssidField);
 
-        passField = field("Password",
+        // Never write the saved passphrase back into the field: a screenshot or
+        // a glance is enough to leak it. The hint only says whether one exists.
+        passField = field(passphraseHint(),
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        passField.setText(LocalWifi.passphrase(this));
         passField.setLayoutParams(spaced(matchWrap(), 10));
         root.addView(passField);
 
@@ -320,9 +321,17 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View v) {
                 LocalWifi.setSsid(MainActivity.this, ssidField.getText().toString());
-                LocalWifi.setPassphrase(MainActivity.this, passField.getText().toString());
+                String typed = passField.getText().toString();
+                // The field starts empty, so an empty field means "keep the
+                // stored passphrase"; only a newly typed value replaces it.
+                if (!typed.isEmpty()
+                        && !LocalWifi.setPassphrase(MainActivity.this, typed)) {
+                    toast("Could not store the password securely");
+                }
                 sendServiceAction(MonitorService.ACTION_RELOAD_LOCAL);
                 ssidField.setText(LocalWifi.ssid(MainActivity.this));
+                passField.setText("");
+                passField.setHint(passphraseHint());
                 toast("Saved: " + LocalWifi.ssid(MainActivity.this));
                 refreshStatus();
             }
@@ -536,6 +545,13 @@ public class MainActivity extends Activity {
     private LinearLayout.LayoutParams spaced(LinearLayout.LayoutParams lp, int topDp) {
         lp.topMargin = dp(topDp);
         return lp;
+    }
+
+    /** Whether a passphrase is stored, without putting it back on screen. */
+    private String passphraseHint() {
+        String saved = LocalWifi.passphrase(this);
+        return saved == null || saved.isEmpty()
+                ? "Password" : "Saved - type a new password to replace";
     }
 
     private EditText field(String hint, int inputType) {
