@@ -53,7 +53,16 @@ fi
 
 # With a jar, compile the whole app: the suites may then reach any class and
 # the run classpath still has no android.jar. Without one, keep only the sources
-# that do not import android.*, which is enough for the pure suites.
+# that do not import android.* and skip the suites whose subjects do: the
+# identity and certificate classes import android.content.Context, so their
+# tests cannot compile when those classes are omitted.
+jar_only_test() {
+    case "$(basename "$1")" in
+        IdentityTest.java|CertificateTest.java) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 if [ -n "$android_jar" ]; then
     mapfile -t sources < <(find "$root/src" -name '*.java' | sort)
     echo "android.jar: $android_jar"
@@ -65,14 +74,26 @@ else
         fi
     done < <(find "$root/src" -name '*.java' | sort)
     echo "android.jar: not found; compiling Android-free sources only"
+    echo "skipped (needs android.jar): IdentityTest CertificateTest"
 fi
 
-# TestSupport and SuiteRunner are compiled but not discovered as suites.
-mapfile -t test_sources < <(find "$here/unit" -name '*.java' | sort)
-mapfile -t tests < <(find "$here/unit/java" -name '*Test.java' | sort)
+# TestSupport and SuiteRunner are compiled but not discovered as suites. The
+# two suites that compile against an Android-importing subject are left out of
+# both lists when there is no jar to compile that subject against.
+test_sources=()
+tests=()
+while IFS= read -r file; do
+    if [ -z "$android_jar" ] && jar_only_test "$file"; then
+        continue
+    fi
+    test_sources+=("$file")
+    if [[ "$file" == "$here"/unit/java/*Test.java ]]; then
+        tests+=("$file")
+    fi
+done < <(find "$here/unit" -name '*.java' | sort)
 
 if [ "${#tests[@]}" -eq 0 ]; then
-    echo "FAIL no *Test.java under $here/unit/java" >&2
+    echo "FAIL no runnable *Test.java under $here/unit/java" >&2
     exit 1
 fi
 

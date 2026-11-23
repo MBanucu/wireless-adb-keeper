@@ -74,8 +74,8 @@ newest platform under `ANDROID_HOME` or `ANDROID_SDK_ROOT` (what CI sets), then
 or at the repository root. The SDK wins over a stale root jar on purpose: the
 app targets constants that an older jar does not have. With a
 jar, all of `src/` is compiled against it. Without one, only sources that do
-not `import android.*` are compiled, which is enough for the six pure seam
-suites but not for the two ported probe suites below.
+not `import android.*` are compiled, and the two ported probe suites below are
+skipped with a message; the six pure seam suites still run.
 
 The **run** classpath contains the test output only - deliberately not
 `android.jar`. A suite that reaches an Android API by accident fails with
