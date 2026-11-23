@@ -32,7 +32,6 @@ public final class LocalWifi {
     public static final String DEFAULT_SSID = "";
     public static final String PREFS = "local_wifi";
     public static final String KEY_SSID = "ssid";
-    public static final String KEY_PASSPHRASE = "passphrase";
     public static final String KEY_ENABLED = "enabled";
     public static final String KEY_MODE = "mode";
     public static final String MODE_AUTO = "auto";
@@ -96,14 +95,14 @@ public final class LocalWifi {
                 .edit().putBoolean(KEY_ENABLED, value).apply();
     }
 
+    /** The saved passphrase, or null when the Keystore cannot decrypt it. */
     public static String passphrase(Context c) {
-        return c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .getString(KEY_PASSPHRASE, "");
+        return PassphraseStore.get(c);
     }
 
-    public static void setPassphrase(Context c, String value) {
-        c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit().putString(KEY_PASSPHRASE, value == null ? "" : value).apply();
+    /** Stores the passphrase encrypted; false means the Keystore failed. */
+    public static boolean setPassphrase(Context c, String value) {
+        return PassphraseStore.put(c, value);
     }
 
     public static String mode(Context c) {
