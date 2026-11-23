@@ -87,8 +87,25 @@ transport needs stream injection, or libadb takes that path (see M3).
 
 **Status:** key storage is done and verified on the phone — `AdbIdentity` keeps the key at
 `/data/user_de/0/<pkg>/files/adb-identity/adbkey.pk8` (0600), reported by `keeper.sh pubkey`.
-Pairing itself is not started; the gate is decided below. Reading the key across a reboot
-before unlock is still unproven.
+The certificate and the pairing call are written and build; pairing has **not** run against
+the phone yet, so it is unverified. Reading the key across a reboot before unlock is still
+unproven.
+
+What exists now, and where it lives:
+
+- `src/AdbCertificate.java` — self-signed X.509 for the ADB key, DER built by hand (no
+  BouncyCastle in `src/`), stored as `adbkey.crt` beside the key. It re-parses and verifies
+  its own output before writing, and `keytool -printcert` reads v3, SHA256withRSA,
+  `digitalSignature`, CA:false. Regenerated if the key is replaced.
+- `src-pairing/Pairing.java` — `PairingConnectionCtx` over the port advertised as
+  `_adb-tls-pairing._tcp`, plus `verify()`: mDNS for `_adb-tls-connect._tcp`, then
+  `AdbConnection.create(...)` and `open("shell:id")`. That reply is the M2 acceptance test.
+- `src-pairing/PairActivity.java` — one screen: code field, Pair, Test connection, and a
+  shortcut to Developer options. Reached from Help → Pair this phone.
+- `build.gradle.kts` — JitPack repository, `libadb-android:3.1.1`, `src-pairing` added to the
+  Gradle source set only, and the `.PairActivity` entry injected into the staged manifest. The
+  canonical manifest and `build.sh` are untouched, so the Termux APK still builds with no
+  dependency and no pairing screen.
 
 Three pieces:
 
@@ -134,6 +151,10 @@ after a reboot the pinned port is back before the first unlock. Success is the w
 connection, not the key file: the earlier wording, "`adb_keys` contains the app's key",
 is untestable — `/data/misc/adb/adb_keys` is unreadable from the shell uid and the app is
 not debuggable, so `run-as` cannot reach it either.
+
+*Next:* install the Gradle APK, open Help → Pair this phone while the system pairing dialog
+is up, and read the code. Until that reply arrives, "Test connection" returning
+`uid=2000(shell)` is the only thing that will close this milestone.
 
 *Still unproven:* reading the key across a reboot before unlock. The `user_de` path
 proves the mechanism; no reboot test has run yet.

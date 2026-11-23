@@ -334,6 +334,28 @@ public class MainActivity extends Activity {
         LinearLayout root = column();
         pageHeader(root, "Help", "One-time setup, background behaviour, and options.");
 
+        // Pairing lives in src-pairing, which only the Gradle build compiles, so
+        // the button appears only where it can work.
+        if (hasPairing()) {
+            root.addView(sectionLabel("App key"));
+            action(root, "Pair this phone",
+                    "One-time setup: gives the app its own ADB key, trusted by this phone, "
+                            + "so pinning the port no longer needs Termux. Opens Developer "
+                            + "options' pairing dialog instructions; the 6-digit code goes in "
+                            + "there.",
+                    true, new View.OnClickListener() {
+                        @Override
+                        public void onClick(View v) {
+                            try {
+                                startActivity(new Intent().setClassName(MainActivity.this,
+                                        "io.github.mbanucu.wirelessadbkeeper.PairActivity"));
+                            } catch (Exception e) {
+                                toast("Could not open pairing: " + e);
+                            }
+                        }
+                    });
+        }
+
         root.addView(sectionLabel("Keep-alive"));
         action(root, "Schedule keep-alive (every 15 min)",
                 "Registers the periodic JobScheduler fallback that re-applies wireless "
@@ -559,6 +581,16 @@ public class MainActivity extends Activity {
 
     private void toast(String text) {
         Toast.makeText(this, text, Toast.LENGTH_SHORT).show();
+    }
+
+    /** Whether this APK carries the libadb-backed pairing screen. */
+    private static boolean hasPairing() {
+        try {
+            Class.forName("io.github.mbanucu.wirelessadbkeeper.Pairing");
+            return true;
+        } catch (Throwable e) {
+            return false;
+        }
     }
 
     private void startMonitorService() {
