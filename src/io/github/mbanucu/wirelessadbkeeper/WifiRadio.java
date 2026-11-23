@@ -20,7 +20,21 @@ public final class WifiRadio {
     private static final String SCRIPT =
             "/data/data/com.termux/files/home/wireless-adb-keeper/wifi-on.sh";
 
+    /** Latest RESULT line Termux sent back for wifi-on.sh. */
+    private static volatile TermuxResult lastResult;
+
     private WifiRadio() {}
+
+    /** The script's own last RESULT line, or "none" before one arrives. */
+    public static String result() {
+        TermuxResult r = lastResult;
+        return r == null ? "none" : r.uiLine();
+    }
+
+    static void recordResult(TermuxResult r) {
+        if (r == null || !r.isWifiScript()) return;
+        lastResult = r;
+    }
 
     /**
      * Asks for Wi-Fi to be switched on.

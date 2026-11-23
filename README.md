@@ -63,7 +63,8 @@ samples and cannot be published, so it is the GitHub-handle form instead.
   Single instance, wake lock held while running and released on exit, rotating log.
 - `pin-adb-port.sh` — attaches to adbd (a serial the keepalive already holds, then
   mDNS, then the phone's TCP table or a scan) and sends `adb tcpip 5555`. Run by the
-  app, not by hand.
+  app, not by hand. Its last stdout line is `RESULT pinned=5555` (or
+  `RESULT error=no-adbd`); see [Script result contract](#script-result-contract).
 - `keeper.sh` — laptop/Termux-side wrapper that maps friendly command names onto the
   app's content provider, and prints the `key=value` reply.
 - `keeperctl.sh` — the same friendly commands straight from a Termux prompt, without
@@ -71,12 +72,13 @@ samples and cannot be published, so it is the GitHub-handle form instead.
 - `wifi-on.sh` — turns the Wi-Fi radio on with `svc wifi enable` over Termux's adb,
   which keeps working with the radio off because it goes through loopback. Tries the
   pinned port first, then any serial adb already holds. Run by the app's
-  **Turn Wi-Fi on** button.
+  **Turn Wi-Fi on** button. Ends with `RESULT wifi=on` or `RESULT error=...`.
 - `adb-mdns.py` — reads adbd's own `_adb-tls-connect._tcp` advertisement with
   `python-zeroconf`, filters out stale advertisements, and prints the live port.
   Needs `pip install zeroconf`; without it the keepalive falls back to scanning.
 - `reconnect.sh` / `wait_adb.sh` — one-shot reconnect and a bounded "wait for adbd to
-  appear" helper, useful after rebooting the phone. Both try the pinned port first.
+  appear" helper, useful after rebooting the phone. Both try the pinned port first;
+  `wait_adb.sh` ends with `RESULT connected=<port>` or `RESULT error=timeout`.
 - `discover.sh` / `scan_ports.py` — the one discovery implementation: shared port
   range, pinned-port default, mDNS, the phone's `/proc/net/tcp` table, the loopback
   scan, and connect-and-verify. Sourced by the other scripts so they cannot drift
@@ -159,11 +161,13 @@ will not update an installed `build.sh` build.
 
 ### Probes and CI
 
-`tools/` holds two host-side diagnostics. Gradle compiles them against the
+`tools/` holds host-side diagnostics. Gradle compiles them against the
 app's `android.jar`, so neither needs a hand-written `javac` line:
 
 ```bash
-./gradlew probe       # IdentityProbe: AdbKey/AdbIdentity/Base64Codec, no device
+./gradlew probe       # IdentityProbe, TokenProbe, ResultProbe and the scripts' RESULT contract
+./gradlew probeResult # TermuxResult: the RESULT-line parser, no device
+./gradlew probeScripts # pin-adb-port.sh, wait_adb.sh, wifi-on.sh with a fake adb
 ./gradlew probeAdb    # AdbProbe: needs a phone with adbd on 127.0.0.1:5555
 ./gradlew probeAdb -PadbKey=$HOME/.android/adbkey -PadbPort=5555 -PadbPinPort=5555
 ./gradlew probeAdb -PadbTcpip=true   # also sends `tcpip:5555` and times the re-pin
@@ -242,9 +246,10 @@ chmod +x ~/wireless-adb-keeper/*.sh ~/wireless-adb-keeper/*.py
 ```
 
 An existing install at `~/wireless-adb-keeper/` must re-run that command after
-upgrading: `pin-adb-port.sh` now needs `discover.sh` and `scan_ports.py` beside it, and
-the app cannot report a missing helper because `RUN_COMMAND` is fire-and-forget — it
-records "asked Termux" and the port stays closed (#37).
+upgrading: `pin-adb-port.sh` now needs `discover.sh` and `scan_ports.py` beside it.
+Termux 0.109+ sends the script's exit code, stdout and stderr back, so a missing
+helper now shows its own error under **Pin result** and in the journal; older
+Termux still only sees the port stay closed (#37).
 
 Open the app, enter the Wi-Fi SSID and password (both modes need it; open networks need
 none), tap **Save**, then **Connect now** and approve the "available networks"
@@ -380,9 +385,9 @@ grant, auto-connect that stopped after a reboot — the answer is on the phone,
 not only in `logcat`.
 
 - **Diag tab** in the app: a `key=value` snapshot (uptime, process start, unlock
-  state, mode, service, wireless flag, port 5555, Termux and permission state,
-  journal size) above the recent events, with **Copy diagnostics** and
-  **Refresh**.
+  state, mode, service, wireless flag, port 5555, the last `pin_result` and
+  `wifi_result`, Termux and permission state, journal size) above the recent
+  events, with **Copy diagnostics** and **Refresh**.
 - **From adb** (and therefore from a script):
 
   ```bash
@@ -407,6 +412,8 @@ Event codes are stable (`area.action`), so `grep` works on a copied report:
 | `svc.start`, `svc.unlocked`, `svc.mode`, `svc.connect` | service created (with unlock state), mode applied after unlock, mode or connect request |
 | `ensure.changed`, `ensure.noop`, `ensure.no_wifi`, `ensure.no_permission`, `ensure.failed` | what `Ensurer` did, journalled only when the result changes |
 | `pin.state` | the 5555 probe changed state (listening or the reason it is not) |
+| `pin.result`, `script.result` | Termux returned a script's stdout, stderr, exit code and final `RESULT` line |
+| `pin.fallback` | the port probe is the only evidence: Termux is older than 0.109 or sent no result |
 | `wifi.suggest.added`, `wifi.suggest.failed`, `wifi.suggest.no_password`, `wifi.suggest.build_failed`, `wifi.suggest.record_unsealed` | suggestion result, with the raw status code in the detail |
 | `wifi.secret.undecryptable`, `wifi.secret.unsealable` | the Keystore could not read or write a secret, e.g. after a lock-screen change |
 
@@ -441,6 +448,45 @@ Requirements:
 - The `INTERNET` permission. Not for the network as such: without it Android refuses
   even a loopback `socket()`, which made the watchdog report the port as closed while it
   was listening perfectly well.
+- Termux 0.109+ to report the script's result. It is not required for pinning: an older
+  Termux ignores the pending intent and the port probe remains the fallback.
+
+### Script result contract
+
+The app asks Termux for the execution result with the
+`com.termux.RUN_COMMAND_PENDING_INTENT` extra (Termux >= 0.109). Every script the
+app runs ends with one machine-readable line on stdout, `RESULT key=value ...`;
+values are single tokens separated by whitespace, and the last `RESULT` line
+wins if a script prints more than one.
+
+| script | success | failure |
+| --- | --- | --- |
+| `pin-adb-port.sh` | `RESULT pinned=5555` | `RESULT error=no-adbd`, `RESULT error=port-closed port=5555` |
+| `wait_adb.sh` | `RESULT connected=5555` | `RESULT error=timeout` |
+| `wifi-on.sh` | `RESULT wifi=on` | `RESULT error=no-device`, `RESULT error=wifi-off state=0` |
+
+A pin already running under another PID exits 0 with `RESULT skipped=running`.
+The app parses that line, keeps Termux's stdout, stderr and exit code, and
+writes one `pin.result` (or `script.result`) event to the journal. The raw
+bundle keys are Termux's own: `result` → `stdout`, `stderr`, `exitCode`, `err`,
+`errmsg`.
+
+What the person holding the phone sees:
+
+- **Success**: the Status page's **Pin result** row shows the script's own
+  `pinned=5555 (exit 0)`, and **Pinned port** reads
+  `listening on 5555; script pinned=5555`.
+- **Failure**: **Pin result** shows the script's error, its exit code and the
+  first stderr line, for example `error=no-adbd (exit 1); adbd: no devices`.
+  **Pinned port** carries the same reason instead of a bare `closed`, and the
+  full line is in the Diag journal under `pin.result`.
+- **Older Termux** (before 0.109): the pending intent is ignored, **Pin
+  result** stays `none`, and one `pin.fallback` journal event says the port
+  probe is the only evidence. Pinning itself behaves exactly as before.
+
+The probe is still the authority on whether the socket answers; a script's
+RESULT line is only trusted for five minutes, so a later failure is not hidden
+by an old success.
 
 Measured on this phone (Android 15, unrooted):
 

@@ -9,6 +9,9 @@
 # The pinned port is tried first, because the app keeps adbd there even when the
 # radio is off. If it is not pinned (or the connect fails), any serial that adb
 # already holds will do.
+#
+# Result: the last stdout line is machine readable, for the app:
+#   RESULT wifi=on | RESULT error=no-device | RESULT error=wifi-off state=0
 set -u
 
 PIN_PORT=${ADB_PIN_PORT:-5555}
@@ -24,10 +27,16 @@ if [ -z "${serial:-}" ]; then
 fi
 if [ -z "${serial:-}" ]; then
     echo "wifi-on: no adb device to ask" >&2
+    echo "RESULT error=no-device"
     exit 1
 fi
 
 adb -s "$serial" shell svc wifi enable
 state=$(adb -s "$serial" shell settings get global wifi_on 2>/dev/null | tr -d '\r')
 echo "wifi_on=${state:-unknown}"
-[ "${state:-}" = "1" ]
+if [ "${state:-}" = "1" ]; then
+    echo "RESULT wifi=on"
+    exit 0
+fi
+echo "RESULT error=wifi-off state=${state:-unknown}"
+exit 1

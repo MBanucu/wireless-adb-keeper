@@ -2,8 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     package="io.github.mbanucu.wirelessadbkeeper"
-    android:versionCode="9"
-    android:versionName="1.8">
+    android:versionCode="10"
+    android:versionName="1.9">
 
     <!-- Android 10 is the real floor: the reconnect features are built on
          WifiNetworkSuggestion and WifiNetworkSpecifier, which arrived in API 29.
@@ -49,6 +49,18 @@
         android:label="Wireless ADB Keeper"
         android:allowBackup="false"
         android:supportsRtl="true">
+
+        <!-- Receives the result of a RUN_COMMAND the app sent to Termux, via
+             the PendingIntent in com.termux.RUN_COMMAND_PENDING_INTENT. The
+             PendingIntent names this service and comes from this app, so it
+             stays unexported; see TermuxResultService. Older Termux ignores
+             the extra and the port probe remains the fallback. The pin path
+             runs before the first unlock, so this only touches the bundle and
+             device-protected diagnostics. -->
+        <service
+            android:name=".TermuxResultService"
+            android:directBootAware="true"
+            android:exported="false" />
 
         <activity
             android:name=".MainActivity"

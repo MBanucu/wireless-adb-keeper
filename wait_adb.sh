@@ -5,6 +5,9 @@
 # reconnects without a scan. Then the port mDNS advertises, then the shared
 # discovery helper (the phone's TCP table if a serial is attached, otherwise a
 # loopback scan). PORT_START/PORT_END and ADB_PIN_PORT override the defaults.
+#
+# Result: the last stdout line is machine readable, for the app:
+#   RESULT connected=<port> | RESULT error=timeout
 set -u
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || exit 1
 cd "$SCRIPT_DIR" || exit 1
@@ -41,10 +44,12 @@ for round in $(seq 1 40); do
     if [ -n "$connected" ]; then
         echo "CONNECTED 127.0.0.1:$connected"
         adb devices -l
+        echo "RESULT connected=$connected"
         exit 0
     fi
     echo "round $round: no adbd yet"
     sleep 12
 done
 echo "TIMEOUT: adbd never appeared"
+echo "RESULT error=timeout"
 exit 1

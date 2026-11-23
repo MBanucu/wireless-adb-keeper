@@ -8,6 +8,7 @@
 // name and the version fields now, so this build stages a copy with those
 // attributes removed (and the <uses-sdk> element, which comes from defaultConfig).
 
+import org.gradle.api.tasks.Exec
 import org.gradle.api.tasks.JavaExec
 import org.gradle.api.tasks.compile.JavaCompile
 
@@ -135,6 +136,7 @@ val compileProbes = tasks.register<JavaCompile>("compileProbes") {
         file("src/io/github/mbanucu/wirelessadbkeeper/AdbCertificate.java"),
         file("src/io/github/mbanucu/wirelessadbkeeper/Base64Codec.java"),
         file("src/io/github/mbanucu/wirelessadbkeeper/ControlToken.java"),
+        file("src/io/github/mbanucu/wirelessadbkeeper/TermuxResult.java"),
     )
     classpath = files(bootClasspath)
     destinationDirectory.set(probeClasses)
@@ -161,6 +163,20 @@ val probeToken = tasks.register<JavaExec>("probeToken") {
     args(layout.buildDirectory.dir("probe/token").get().asFile.absolutePath)
 }
 
+val probeResult = tasks.register<JavaExec>("probeResult") {
+    group = "verification"
+    description = "Runs ResultProbe (TermuxResult); needs no device."
+    dependsOn(compileProbes)
+    classpath = files(probeClasses, bootClasspath)
+    mainClass.set("io.github.mbanucu.wirelessadbkeeper.ResultProbe")
+}
+
+val probeScripts = tasks.register<Exec>("probeScripts") {
+    group = "verification"
+    description = "Checks the scripts' final RESULT line with a fake adb; needs no device."
+    commandLine("bash", layout.projectDirectory.file("tools/result-contract.sh").asFile.absolutePath)
+}
+
 val probeAdb = tasks.register<JavaExec>("probeAdb") {
     group = "verification"
     description = "Runs AdbProbe against adbd on the loopback; needs a phone and is never part of CI."
@@ -182,8 +198,8 @@ val probeAdb = tasks.register<JavaExec>("probeAdb") {
 // fail on a machine with no adbd listening on 5555.
 tasks.register("probe") {
     group = "verification"
-    description = "Runs the device-free host probes (IdentityProbe, TokenProbe)."
-    dependsOn(probeIdentity, probeToken)
+    description = "Runs the device-free host probes (IdentityProbe, TokenProbe, ResultProbe, scripts)."
+    dependsOn(probeIdentity, probeToken, probeResult, probeScripts)
 }
 
 // `check` stays the standard entry point, and it now includes the probe. AGP
@@ -191,8 +207,8 @@ tasks.register("probe") {
 // named; that keeps `./gradlew test` meaningful even though there is no JUnit
 // dependency to run.
 tasks.matching { it.name == "test" }.configureEach {
-    dependsOn(probeIdentity, probeToken)
+    dependsOn(probeIdentity, probeToken, probeResult, probeScripts)
 }
 tasks.named("check") {
-    dependsOn(probeIdentity, probeToken)
+    dependsOn(probeIdentity, probeToken, probeResult, probeScripts)
 }
