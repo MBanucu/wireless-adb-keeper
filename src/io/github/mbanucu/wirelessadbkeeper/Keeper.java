@@ -183,6 +183,15 @@ public final class Keeper {
             return fail(c, DiagReasons.Failure.PROFILE_UNKNOWN,
                     DiagReasons.profileDetail(ProfileTable.ERROR_UNKNOWN));
         }
+        // Remove the platform suggestion while the applied record still names
+        // it; ProfileTable.remove clears that record. On failure keep both so
+        // the user can retry instead of leaving an untracked suggestion behind.
+        if (!WifiSuggestion.removeOne(c, cleanId)) {
+            String detail = "could not remove the suggestion for " + cleanId
+                    + "; profile kept; retry the command";
+            Diag.warn(c, "wifi.suggest.refused", detail);
+            return "error=" + detail;
+        }
         ProfileTable.Outcome removed = Profiles.remove(c, cleanId);
         if (!removed.ok()) {
             return profileFailure(c, removed.error());
