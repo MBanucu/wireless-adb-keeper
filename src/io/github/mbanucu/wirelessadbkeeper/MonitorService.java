@@ -9,6 +9,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.database.ContentObserver;
 import android.net.ConnectivityManager;
 import android.net.Network;
@@ -39,6 +40,8 @@ public class MonitorService extends Service {
     private BroadcastReceiver unlockReceiver;
     private Runnable ensureRunnable;
     private Runnable pinTick;
+    private SharedPreferences prefs;
+    private SharedPreferences.OnSharedPreferenceChangeListener prefsListener;
     private String pendingReason = "";
     private LocalWifi localWifi;
     /** Whether the credential-protected Wi-Fi mode has been applied. */
@@ -69,6 +72,7 @@ public class MonitorService extends Service {
         // they can run at LOCKED_BOOT_COMPLETED. The mode comes from credential-
         // protected prefs and has to wait for the first unlock.
         if (userUnlocked()) {
+            registerPrefsListener();
             applyMode("service created");
         }
         scheduleEnsure("service created", 0);
@@ -101,6 +105,7 @@ public class MonitorService extends Service {
             public void onReceive(Context context, Intent intent) {
                 Log.i(Ensurer.TAG, "user unlocked; applying saved Wi-Fi mode");
                 Diag.info(MonitorService.this, "svc.unlocked", "applying saved mode");
+                registerPrefsListener();
                 applyMode("user unlocked");
                 scheduleEnsure("user unlocked", 0);
             }
@@ -115,6 +120,30 @@ public class MonitorService extends Service {
         } catch (Exception e) {
             Log.e(Ensurer.TAG, "could not register unlock receiver", e);
         }
+    }
+
+    /**
+     * Reloads the Wi-Fi mode when the saved settings change.
+     *
+     * This is the provider-safe path: `content call` can write SharedPreferences
+     * but on Android 12+ cannot start this service, so a reload intent never
+     * arrives. The provider bumps one revision key after its writes; watching
+     * that key means a running monitor applies the change without a restart,
+     * while a monitor that is not running reads the same prefs on its next
+     * start. The prefs are credential-protected, so this waits for unlock.
+     */
+    private void registerPrefsListener() {
+        if (prefsListener != null || !userUnlocked()) return;
+        prefs = getSharedPreferences(LocalWifi.PREFS, Context.MODE_PRIVATE);
+        prefsListener = new SharedPreferences.OnSharedPreferenceChangeListener() {
+            @Override
+            public void onSharedPreferenceChanged(SharedPreferences p, String key) {
+                if (!LocalWifi.KEY_REVISION.equals(key) || !userUnlocked()) return;
+                Log.i(Ensurer.TAG, "saved Wi-Fi settings changed; reloading");
+                applyMode("settings saved");
+            }
+        };
+        prefs.registerOnSharedPreferenceChangeListener(prefsListener);
     }
 
     private void applyMode(String reason) {
@@ -392,6 +421,11 @@ public class MonitorService extends Service {
             } catch (Exception ignored) {
             }
             unlockReceiver = null;
+        }
+        if (prefs != null && prefsListener != null) {
+            prefs.unregisterOnSharedPreferenceChangeListener(prefsListener);
+            prefsListener = null;
+            prefs = null;
         }
         Log.i(Ensurer.TAG, "MonitorService stopped");
         super.onDestroy();

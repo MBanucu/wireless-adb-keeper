@@ -248,6 +248,12 @@ force-stopped or only just installed, which a broadcast cannot do.
 ./keeper.sh diag              # status snapshot + recent events
 ```
 
+`mode` and `save` reply with `reload=monitor` when a running monitor applied the
+change, or `reload=next start` when no service was running: the value is saved in
+either case and does not need a service restart. (`content call` cannot start the
+monitor service on Android 12+, so the running service watches the saved settings
+instead of being told by an intent.)
+
 Without the wrapper, the same thing by hand:
 
 ```bash
