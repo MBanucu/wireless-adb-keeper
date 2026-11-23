@@ -96,7 +96,10 @@ public class MonitorService extends Service {
 
     private static String suggestionDetail(int status) {
         if (status == WifiSuggestion.STATUS_SUCCESS) return "suggestion active";
+        if (status == -1) return "no Wi-Fi service";
         if (status == -2) return "enter Wi-Fi password";
+        if (status == -3) return "could not build suggestion";
+        if (status == -4) return "suggestion request failed";
         return "suggestion status " + status;
     }
 
