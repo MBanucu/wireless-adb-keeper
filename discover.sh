@@ -10,6 +10,12 @@ DISCOVER_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # The keeper app pins adbd here when it can (pin-adb-port.sh).
 ADB_PIN_PORT=${ADB_PIN_PORT:-5555}
 
+# The two services adbd advertises over mDNS. The pairing one exists only while
+# the "Pair device with pairing code" dialog is open; pair-local.sh reads it.
+DISCOVER_CONNECT_SERVICE=_adb-tls-connect._tcp.local.
+# shellcheck disable=SC2034  # used by pair-local.sh after sourcing this file
+DISCOVER_PAIRING_SERVICE=_adb-tls-pairing._tcp.local.
+
 # adbd's random TLS port is a listening socket in Linux's ephemeral range.
 # Read the kernel's value when it is readable; on Android SELinux denies Termux
 # access to /proc/sys/net/ipv4/ip_local_port_range, so the documented Linux
@@ -34,11 +40,17 @@ discover_mdns_available() {
         python3 -c 'import zeroconf' >/dev/null 2>&1
 }
 
-# discover_mdns [seconds]: ports adbd advertises, newest first.
-discover_mdns() {
-    local seconds="${1:-3}"
+# discover_mdns_service <service> [seconds]: ports for one advertised service.
+discover_mdns_service() {
+    local service="${1:-}" seconds="${2:-3}"
+    [ -n "$service" ] || return 0
     discover_mdns_available || return 0
-    "$DISCOVER_DIR/adb-mdns.py" "$seconds" 2>/dev/null
+    "$DISCOVER_DIR/adb-mdns.py" "$seconds" "$service" 2>/dev/null
+}
+
+# discover_mdns [seconds]: ports adbd advertises for connecting, newest first.
+discover_mdns() {
+    discover_mdns_service "$DISCOVER_CONNECT_SERVICE" "${1:-3}"
 }
 
 # discover_proc <serial>: print listening ports from the phone's TCP tables.
