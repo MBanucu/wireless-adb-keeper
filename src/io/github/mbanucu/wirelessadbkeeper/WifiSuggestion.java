@@ -1,6 +1,7 @@
 package io.github.mbanucu.wirelessadbkeeper;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiManager;
@@ -8,12 +9,13 @@ import android.net.wifi.WifiNetworkSuggestion;
 import android.os.Build;
 import android.util.Log;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 
 /**
- * Silent auto-connect via WifiNetworkSuggestion.
+ * Silent auto-connect via WifiNetworkSuggestion, one suggestion per profile.
  *
  * Unlike WifiNetworkSpecifier, a suggestion survives reboots and reconnects on
  * its own without a dialog. Android asks for approval exactly once (via a
@@ -22,17 +24,22 @@ import java.util.Locale;
  * The network is marked metered, which keeps it below unmetered networks in the
  * default-route ranking, and an access point without internet access never
  * validates, so mobile data normally stays the default route.
+ *
+ * <p>The decisions (which profiles to register, which record to rewrite) live
+ * in {@link SuggestionRegistry}; this class is the Android adapter: the scan,
+ * the suggestion builder and the manager calls.
  */
 public final class WifiSuggestion {
 
-    public static final int STATUS_SUCCESS = 0;
+    public static final int STATUS_SUCCESS = SuggestionRegistry.STATUS_SUCCESS;
+
     private static final String PREFS = "wifi_suggestion";
     /** Pre-upgrade builds wrote ssid\0pass, and later ssid\0security\0pass, here. */
     private static final String KEY_LEGACY_APPLIED = "applied";
     /** Hash-only key from the interim build; it cannot rebuild a suggestion. */
     private static final String KEY_HASH_APPLIED = "applied_sha256";
     /** Encrypted in PassphraseStore, never in this prefs file. */
-    private static final String SLOT_APPLIED = ProfileTable.LEGACY_APPLIED_SLOT;
+    private static final String SLOT_LEGACY = ProfileTable.LEGACY_APPLIED_SLOT;
 
     private static final String SEC_WPA2 = SuggestionRecord.SEC_WPA2;
     private static final String SEC_WPA3 = SuggestionRecord.SEC_WPA3;
@@ -46,136 +53,161 @@ public final class WifiSuggestion {
         return c.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
-    public static int add(Context c) {
-        String applied = appliedRecord(c);
+    /**
+     * Registers every profile with a usable credential and reports one status
+     * per profile. The detail is `suggestion <id>: <status>` for each, so a
+     * skipped profile names itself instead of failing the whole pass.
+     */
+    public static SuggestionRegistry.Outcome addAll(Context c) {
+        migrateLegacyPrefs(c);
         WifiManager wm = manager(c);
         if (wm == null) {
             Diag.warn(c, "wifi.suggest.no_service", "WifiManager is unavailable");
-            return -1;
+            return SuggestionRegistry.Outcome.unavailable();
         }
-
-        String ssid = LocalWifi.ssid(c);
-        String pass = LocalWifi.passphrase(c);
-        // A suggestion has to carry the network's security, and auto-connect
-        // needs a passphrase for anything that is not open. Only the scan can
-        // tell us which, so without one we keep the old WPA2 + password path.
-        String scanned = scannedSecurity(c, ssid);
-        String security;
-        if (SEC_OPEN.equals(scanned)) {
-            security = SEC_OPEN;
-        } else if (SEC_OWE.equals(scanned)) {
-            security = SEC_OWE;
-        } else if (pass == null) {
-            journal(c, "warn", "wifi.suggest.decrypt_failed", ssid
-                    + ": the stored passphrase cannot be decrypted; save it again");
-            return -2;
-        } else if (pass.isEmpty()) {
-            Log.w(Ensurer.TAG, "wifi suggestion: no password stored for " + ssid);
-            Diag.warn(c, "wifi.suggest.no_password", ssid + ": auto-connect needs the password");
-            return -2;
-        } else {
-            // A WPA3-only AP rejects a WPA2 passphrase; a WPA2/WPA3 transition
-            // AP advertises both and also accepts WPA2.
-            security = SEC_WPA3.equals(scanned) ? SEC_WPA3 : SEC_WPA2;
+        List<Profile> profiles = Profiles.list(c);
+        List<Profile> resolved = new ArrayList<>(profiles.size());
+        for (Profile profile : profiles) {
+            resolved.add(configuredSecurity(c, profile));
         }
-        // Open and OWE APs need no secret, even if a stale one is still stored.
-        String secret = (SEC_OPEN.equals(security) || SEC_OWE.equals(security)) ? "" : pass;
-
-        // Re-adding an identical suggestion makes Android drop the network for a
-        // moment, so only rewrite it when the configuration actually changed.
-        String wanted = SuggestionRecord.encode(ssid, security, secret);
-        if (wanted.equals(applied) && count(c) > 0) {
-            Log.i(Ensurer.TAG, "wifi suggestion already present for " + ssid);
-            return STATUS_SUCCESS;
-        }
-
-        remove(c);
-
-        WifiNetworkSuggestion suggestion;
-        try {
-            suggestion = suggest(ssid, security, secret);
-        } catch (Exception e) {
-            Log.e(Ensurer.TAG, "wifi suggestion: build failed", e);
-            Diag.error(c, "wifi.suggest.build_failed", ssid + " (" + security + "): " + e);
-            return -3;
-        }
-
-        try {
-            int status = wm.addNetworkSuggestions(Collections.singletonList(suggestion));
-            Log.i(Ensurer.TAG, "wifi suggestion added for " + ssid + " (" + security
-                    + "): status " + status);
-            if (status == STATUS_SUCCESS) {
-                Diag.info(c, "wifi.suggest.added", ssid + " (" + security + ")");
-                if (!PassphraseStore.putSecret(c, SLOT_APPLIED, wanted)) {
-                    Log.w(Ensurer.TAG, "wifi suggestion: could not encrypt applied record");
-                    Diag.warn(c, "wifi.suggest.record_unsealed", ssid);
-                }
-            } else {
-                Diag.warn(c, "wifi.suggest.refused", ssid + " (" + security
-                        + "): status " + status);
-            }
-            return status;
-        } catch (Exception e) {
-            Log.e(Ensurer.TAG, "wifi suggestion: addNetworkSuggestions failed", e);
-            Diag.error(c, "wifi.suggest.refused", ssid + ": request failed: " + e);
-            return -4;
-        }
+        SuggestionRegistry.Outcome outcome =
+                new SuggestionRegistry(secrets(c), new AndroidManager(c, wm)).addAll(resolved);
+        journal(c, outcome);
+        Log.i(Ensurer.TAG, "wifi suggestions: " + outcome.detail());
+        return outcome;
     }
 
-    public static void remove(Context c) {
-        // Read the record before clearing it: on Android 10 this is the only
-        // description of the suggestion Android actually holds.
-        String applied = appliedRecord(c);
+    /** Removes exactly this profile's suggestion and its applied record. */
+    public static boolean removeOne(Context c, String id) {
+        migrateLegacyPrefs(c);
         WifiManager wm = manager(c);
-        if (wm == null) return;
-        PassphraseStore.clearSecret(c, SLOT_APPLIED);
-        try {
-            List<WifiNetworkSuggestion> existing = registered(wm, applied);
-            if (existing != null && !existing.isEmpty()) {
-                wm.removeNetworkSuggestions(existing);
-                Log.i(Ensurer.TAG, "wifi suggestions removed: " + existing.size());
-            }
-        } catch (Exception e) {
-            Log.w(Ensurer.TAG, "wifi suggestion: remove failed: " + e);
-        }
+        if (wm == null) return false;
+        List<Profile> profiles = Profiles.list(c);
+        int removed = new SuggestionRegistry(secrets(c), new AndroidManager(c, wm))
+                .removeOne(profiles, id);
+        Log.i(Ensurer.TAG, "wifi suggestion removed for " + id + ": " + removed);
+        return removed > 0;
     }
 
+    /** Removes every profile's suggestion, for a switch away from auto-connect. */
+    public static int removeAll(Context c) {
+        migrateLegacyPrefs(c);
+        WifiManager wm = manager(c);
+        if (wm == null) return 0;
+        int removed = new SuggestionRegistry(secrets(c), new AndroidManager(c, wm))
+                .removeAll(Profiles.list(c));
+        Log.i(Ensurer.TAG, "wifi suggestions removed: " + removed);
+        return removed;
+    }
+
+    /**
+     * This app's registered suggestions, not "the" suggestion.
+     *
+     * Android 11+ knows the real count; Android 10 can only remove by record,
+     * so there the applied records are the count.
+     */
     public static int count(Context c) {
-        String applied = appliedRecord(c);
+        migrateLegacyPrefs(c);
         WifiManager wm = manager(c);
         if (wm == null) return -1;
-        try {
-            List<WifiNetworkSuggestion> existing = registered(wm, applied);
-            return existing == null ? 0 : existing.size();
-        } catch (Exception e) {
-            return -1;
+        if (Build.VERSION.SDK_INT >= 30) {
+            try {
+                List<WifiNetworkSuggestion> existing = wm.getNetworkSuggestions();
+                return existing == null ? 0 : existing.size();
+            } catch (Exception e) {
+                return -1;
+            }
+        }
+        return new SuggestionRegistry(secrets(c), new AndroidManager(c, wm))
+                .count(Profiles.list(c));
+    }
+
+    /**
+     * A profile's own security wins when it was set; `auto` is decided from the
+     * scan, exactly as the single-network build did. WPA3-only means SAE without
+     * PSK; a transition AP advertises both and stays WPA2 because it also
+     * accepts a WPA2 passphrase.
+     */
+    private static Profile configuredSecurity(Context c, Profile profile) {
+        if (profile.security() != null && !profile.security().isEmpty()) return profile;
+        String scanned = scannedSecurity(c, profile.ssid());
+        return scanned == null
+                ? profile
+                : new Profile(profile.id(), profile.ssid(), scanned);
+    }
+
+    private static SuggestionRegistry.Secrets secrets(final Context c) {
+        return new SuggestionRegistry.Secrets() {
+            @Override
+            public String get(String slot) {
+                return PassphraseStore.getSecret(c, slot);
+            }
+
+            @Override
+            public boolean put(String slot, String value) {
+                return PassphraseStore.putSecret(c, slot, value);
+            }
+
+            @Override
+            public void clear(String slot) {
+                PassphraseStore.clearSecret(c, slot);
+            }
+        };
+    }
+
+    /** One status line per profile, plus the reason for anything not active. */
+    private static void journal(Context c, SuggestionRegistry.Outcome outcome) {
+        for (SuggestionRegistry.Entry entry : outcome.entries()) {
+            if (entry.recordLost()) {
+                journal(c, "warn", "wifi.suggest.record_undecryptable",
+                        entry.id() + " " + entry.ssid()
+                                + ": the applied suggestion record cannot be decrypted;"
+                                + " save the network again");
+            }
+            switch (entry.reason()) {
+                case NO_PASSWORD:
+                    Log.w(Ensurer.TAG, "wifi suggestion: no password stored for "
+                            + entry.ssid());
+                    journal(c, "warn", "wifi.suggest.no_password", entry.id() + " "
+                            + entry.ssid() + ": auto-connect needs the password");
+                    break;
+                case DECRYPT_FAILED:
+                    journal(c, "warn", "wifi.suggest.decrypt_failed", entry.id() + " "
+                            + entry.ssid() + ": the stored passphrase cannot be decrypted;"
+                            + " save it again");
+                    break;
+                case ADDED_UNSEALED:
+                    Log.w(Ensurer.TAG, "wifi suggestion: could not encrypt applied record");
+                    journal(c, "warn", "wifi.suggest.record_unsealed",
+                            entry.id() + " " + entry.ssid());
+                    break;
+                case CURRENT:
+                    Log.i(Ensurer.TAG, "wifi suggestion already present for " + entry.ssid());
+                    break;
+                default:
+                    // ADDED, REFUSED, BUILD_FAILED and REQUEST_FAILED are
+                    // journalled where the manager has the status and exception.
+                    break;
+            }
         }
     }
 
     /**
-     * The applied credentials, encrypted at rest, or "" when none was recorded.
-     *
-     * Pre-upgrade builds kept this in plaintext in the suggestion prefs, first
-     * as `ssid \0 pass` and then as `ssid \0 security \0 pass`. The first touch
-     * migrates whichever shape is found into PassphraseStore and deletes the
-     * plaintext copy. The hash-only record from the interim build is deleted
-     * too: it cannot rebuild a suggestion.
+     * The applied credentials older builds kept in plaintext in the suggestion
+     * prefs, first as `ssid \0 pass` and then as `ssid \0 security \0 pass`.
+     * The first touch moves whichever shape is found into the encrypted legacy
+     * slot and deletes the plaintext copy. The hash-only record from the interim
+     * build is deleted too: it cannot rebuild a suggestion.
      */
-    private static String appliedRecord(Context c) {
-        String stored = PassphraseStore.getSecret(c, SLOT_APPLIED);
-        if (stored == null) {
-            journal(c, "warn", "wifi.suggest.record_undecryptable",
-                    "the applied suggestion record cannot be decrypted; save the network again");
-            stored = "";
-        }
-        android.content.SharedPreferences store = prefs(c);
+    private static void migrateLegacyPrefs(Context c) {
+        SharedPreferences store = prefs(c);
         String legacy = store.getString(KEY_LEGACY_APPLIED, null);
         if (legacy != null) {
-            if (stored.isEmpty()) {
+            String stored = PassphraseStore.getSecret(c, SLOT_LEGACY);
+            if (stored == null || stored.isEmpty()) {
                 String migrated = SuggestionRecord.migrate(legacy);
                 if (!migrated.isEmpty()
-                        && PassphraseStore.putSecret(c, SLOT_APPLIED, migrated)) {
-                    stored = migrated;
+                        && PassphraseStore.putSecret(c, SLOT_LEGACY, migrated)) {
                     Log.i(Ensurer.TAG, "wifi suggestion: migrated applied record");
                 } else {
                     Log.w(Ensurer.TAG, "wifi suggestion: could not migrate applied record");
@@ -189,31 +221,69 @@ public final class WifiSuggestion {
         if (store.contains(KEY_HASH_APPLIED)) {
             store.edit().remove(KEY_HASH_APPLIED).apply();
         }
-        return stored;
     }
 
-    /**
-     * The suggestions this app has registered.
-     *
-     * `getNetworkSuggestions` only exists from Android 11, and on Android 10 it
-     * is a `NoSuchMethodError`, not an exception the callers below would catch.
-     * That version can only remove a suggestion by handing back an identical
-     * object, so it is rebuilt from the record of what was actually added
-     * (`applied`), not from the current form values: after a password change
-     * those no longer match the suggestion Android holds. An empty record means
-     * nothing was added, so `count()` reports 0 instead of claiming a
-     * suggestion exists merely because a passphrase is stored.
-     */
-    private static List<WifiNetworkSuggestion> registered(WifiManager wm, String applied) {
-        if (Build.VERSION.SDK_INT >= 30) {
-            return wm.getNetworkSuggestions();
+    /** The Android manager: one suggestion at a time, each journalled by id. */
+    private static final class AndroidManager implements SuggestionRegistry.Manager {
+        private final Context context;
+        private final WifiManager wm;
+
+        AndroidManager(Context context, WifiManager wm) {
+            this.context = context;
+            this.wm = wm;
         }
-        SuggestionRecord previous = SuggestionRecord.decode(applied);
-        if (previous == null) {
-            return Collections.emptyList();
+
+        @Override
+        public int add(String id, SuggestionRecord record) {
+            WifiNetworkSuggestion suggestion;
+            try {
+                suggestion = suggest(record.ssid(), record.security(), record.passphrase());
+            } catch (Exception e) {
+                Log.e(Ensurer.TAG, "wifi suggestion: build failed", e);
+                Diag.error(context, "wifi.suggest.build_failed", id + " " + record.ssid()
+                        + " (" + record.security() + "): " + e);
+                return SuggestionRegistry.STATUS_BUILD_FAILED;
+            }
+            try {
+                int status = wm.addNetworkSuggestions(Collections.singletonList(suggestion));
+                if (status == STATUS_SUCCESS) {
+                    Diag.info(context, "wifi.suggest.added", id + " " + record.ssid()
+                            + " (" + record.security() + ")");
+                } else {
+                    Diag.warn(context, "wifi.suggest.refused", id + " " + record.ssid()
+                            + " (" + record.security() + "): status " + status);
+                }
+                return status;
+            } catch (Exception e) {
+                Log.e(Ensurer.TAG, "wifi suggestion: addNetworkSuggestions failed", e);
+                Diag.error(context, "wifi.suggest.refused", id + " " + record.ssid()
+                        + ": request failed: " + e);
+                return SuggestionRegistry.STATUS_REQUEST_FAILED;
+            }
         }
-        return Collections.singletonList(
-                suggest(previous.ssid(), previous.security(), previous.passphrase()));
+
+        @Override
+        public int remove(String id, SuggestionRecord record) {
+            try {
+                wm.removeNetworkSuggestions(Collections.singletonList(
+                        suggest(record.ssid(), record.security(), record.passphrase())));
+                return 1;
+            } catch (Exception e) {
+                Log.w(Ensurer.TAG, "wifi suggestion: remove failed for " + id + ": " + e);
+                return 0;
+            }
+        }
+
+        @Override
+        public int count() {
+            if (Build.VERSION.SDK_INT < 30) return -1;
+            try {
+                List<WifiNetworkSuggestion> existing = wm.getNetworkSuggestions();
+                return existing == null ? 0 : existing.size();
+            } catch (Exception e) {
+                return -1;
+            }
+        }
     }
 
     private static WifiNetworkSuggestion suggest(String ssid, String security, String pass) {
@@ -282,7 +352,7 @@ public final class WifiSuggestion {
         }
     }
 
-    /** Last decrypt reason journalled; add/count/remove would otherwise repeat it. */
+    /** Last reason journalled; add/remove would otherwise repeat it. */
     private static String lastJournal = "";
 
     private static void journal(Context c, String level, String code, String detail) {
