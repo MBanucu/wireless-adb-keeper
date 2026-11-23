@@ -27,7 +27,7 @@ fields around it.
 | `port_5555` | the fixed-port probe state, including the last script result |
 | `pin_result` | the last `pin-adb-port.sh` RESULT line, or `none` |
 | `wifi_result` | the last `wifi-on.sh` RESULT line, or `none` |
-| `last_result` | the last local-only state detail, or `suggestion <id>: <status>` per profile in auto mode |
+| `last_result` | the last local-only state detail, naming the profile as `local link: <ssid> (<id>)`, or `suggestion <id>: <status>` per profile in auto mode |
 | `perm.write_secure_settings` | granted / not granted, plus the exact `pm grant` line |
 | `perm.fine_location` | granted / not granted, plus the exact `pm grant` line (not needed before Android 10) |
 | `perm.run_command` | Termux `RUN_COMMAND` grant, plus the exact `pm grant` line; if Termux is missing, the install step comes first |
@@ -59,6 +59,17 @@ Auto-connect keeps one applied record per profile in the encrypted slot
 were actually handed to Android, which is what Android 10 needs for an exact
 removal. An upgrade moves the old single slot to the first profile, so the same
 network is not registered twice.
+
+### Local-only profile selection
+
+Local-only mode requests one profile at a time, using the profile order as the
+priority. A profile whose SSID is in `getScanResults()` is preferred over one
+that is not; the first present profile wins. When no saved SSID is present and a
+link is already up, that link is kept and no new request is made. A cycle tries
+at most three present profiles, and a failed approval advances to the next
+present profile instead of retrying the same one. The status names the profile
+in use as `local link: <ssid> (<id>)`, and every transition emits one
+`local.profile` event.
 
 ## Verbose logging
 
@@ -143,8 +154,10 @@ ring buffer, and never contains a passphrase, control token or pairing code.
 | `local.no_service` | error | `ConnectivityManager` is unavailable |
 | `local.request_refused` | error | `requestNetwork` threw `SecurityException` |
 | `local.request_failed` | error | `requestNetwork` threw another exception |
-| `local.dialog_timeout` | warn | the per-request approval dialog timed out; a retry is scheduled |
-| `local.attempts_exhausted` | warn | three approvals failed; approve in the dialog or tap Connect now |
+| `local.no_candidate` | info | no saved SSID is in the scan and no link is up; the detail lists the profiles tried |
+| `local.profile` | info/warn | one local-only profile transition; the detail names its id, SSID and state (requesting, connected, lost, failed, kept) |
+| `local.dialog_timeout` | warn | the per-request approval dialog timed out; a retry or the next present profile is scheduled |
+| `local.attempts_exhausted` | warn | no automatic attempt is left: the three-attempt budget is used, or every present profile was tried; the detail names the profile and the profiles tried |
 | `key.created` | info | no ADB key was present; a new one was generated, so pair again |
 | `key.load_failed` | error | the `pubkey` action could not load the key (including an unreadable file) |
 | `key.certificate_created` | info | the self-signed certificate was created beside the key |

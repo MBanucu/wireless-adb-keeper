@@ -241,10 +241,13 @@ public class MonitorService extends Service {
         if (localWifi == null) return base;
         String st = LocalWifi.state;
         if ("connected".equals(st)) {
-            return base + " - " + LocalWifi.detail + " link is local-only";
+            return base + " - " + LocalWifi.detail;
         }
         if ("requesting".equals(st)) {
-            return base + " - requesting local-only link to " + LocalWifi.detail;
+            return base + " - requesting " + LocalWifi.detail;
+        }
+        if ("paused".equals(st)) {
+            return base + " - " + LocalWifi.detail;
         }
         return base;
     }
