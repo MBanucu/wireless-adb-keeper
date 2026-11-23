@@ -175,6 +175,10 @@ app's `android.jar`, so neither needs a hand-written `javac` line:
 ./gradlew probeAdb -PadbTcpip=true   # also sends `tcpip:5555` and times the re-pin
 ```
 
+On a phone with the debuggable Gradle build installed, `bash tests/device.sh`
+runs the on-device suites over `keeper.sh` with a state snapshot and restore;
+see [`tests/README.md`](tests/README.md#the-device-suite). It is not part of CI.
+
 `probe` runs only what can run without a phone; `test` and `check` depend on it.
 `probeAdb` stays manual and is never part of CI. There is deliberately no JUnit
 dependency: it does not resolve from the offline Gradle cache this project builds
