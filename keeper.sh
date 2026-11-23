@@ -9,6 +9,7 @@
 #   ./keeper.sh mode auto | mode local
 #   ./keeper.sh save SSID [PASSWORD]
 #   ./keeper.sh pin
+#   ./keeper.sh pubkey
 #   ./keeper.sh schedule
 #
 # The app exposes a content provider for this; `content call` starts the app
@@ -53,6 +54,7 @@ case "$command" in
         ;;
     stop)     call --method service_stop ;;
     pin)      call --method pin_port ;;
+    pubkey)   call --method pubkey ;;
     schedule) call --method schedule ;;
     start)
         # Android refuses a background app starting its own foreground service,
