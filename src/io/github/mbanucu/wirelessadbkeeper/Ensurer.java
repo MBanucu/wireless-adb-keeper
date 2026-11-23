@@ -15,9 +15,6 @@ public final class Ensurer {
     public static final String KEY_ADB_WIFI = "adb_wifi_enabled";
     public static final String KEY_DEV_SETTINGS = "development_settings_enabled";
     public static final String PERM = android.Manifest.permission.WRITE_SECURE_SETTINGS;
-    /** Component that walks the vendor autostart list for the boot scripts. */
-    public static final String A11Y_COMPONENT =
-            "org.phonelink.autotoggle/org.phonelink.autotoggle.ToggleService";
 
     /**
      * Set after we write the setting ourselves. The change notification for our
@@ -64,38 +61,11 @@ public final class Ensurer {
         }
     }
 
-    /**
-     * The accessibility grant is wiped on reboot, and it is what lets the
-     * autostart toggler drive the vendor list at all, so it is restored here
-     * on every boot rather than by hand.
-     */
-    static void ensureAccessibility(Context c) {
-        ContentResolver cr = c.getContentResolver();
-        try {
-            String enabled = Settings.Secure.getString(
-                    cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
-            if (enabled == null || !enabled.contains(A11Y_COMPONENT)) {
-                String merged = enabled == null || enabled.trim().isEmpty()
-                        ? A11Y_COMPONENT
-                        : enabled + ":" + A11Y_COMPONENT;
-                Settings.Secure.putString(
-                        cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, merged);
-                Log.i(TAG, "enabled autostart accessibility service");
-            }
-            if (Settings.Secure.getInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 0) != 1) {
-                Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1);
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "could not enable accessibility", e);
-        }
-    }
-
     public static String ensure(Context c) {
         if (!hasPermission(c)) {
             Log.w(TAG, "ensure: missing WRITE_SECURE_SETTINGS");
             return "Missing WRITE_SECURE_SETTINGS permission";
         }
-        ensureAccessibility(c);
         if (!isWifiConnected(c)) {
             Log.i(TAG, "ensure: no Wi-Fi, skipping");
             return "Wi-Fi not connected";
