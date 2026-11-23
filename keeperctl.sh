@@ -33,12 +33,11 @@ read_token() {
     if [ ! -f "$TOKEN_FILE" ]; then
         cat >&2 <<EOF
 no control token at $TOKEN_FILE
-mint one once, from adb:
-  mkdir -p "$(dirname "$TOKEN_FILE")"
-  chmod 700 "$(dirname "$TOKEN_FILE")"
+mint one once, from adb (see "Control from Termux" in README.md):
+  mkdir -p "$(dirname "$TOKEN_FILE")" && chmod 700 "$(dirname "$TOKEN_FILE")"
   umask 077
   adb shell content call --uri $AUTH --method token \\
-    | sed -n 's/.*data=token=\\([0-9a-f]\\{64\\}\\).*/\\1/p' > "$TOKEN_FILE"
+    | sed -n 's/.*data=token=\([0-9a-f]\{64\}\).*/\1/p' > "$TOKEN_FILE"
   chmod 600 "$TOKEN_FILE"
 EOF
         exit 1

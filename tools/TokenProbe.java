@@ -58,13 +58,6 @@ public final class TokenProbe {
         failures += check("an empty token is refused", !ControlToken.matches(raw, ""));
         failures += check("no stored token refuses a guess", !ControlToken.matches(null, first));
 
-        String prefix = ControlToken.prefix(first);
-        failures += check("the log prefix is short and not the token",
-                prefix.endsWith("...") && !prefix.equals(first)
-                        && prefix.startsWith(first.substring(0, 8)));
-        failures += check("an absent presented token has a log name",
-                "none".equals(ControlToken.prefix(null)));
-
         File broken = new File(dir.getAbsolutePath() + "-broken");
         deleteTree(broken);
         if (!broken.mkdirs()) {

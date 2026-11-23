@@ -71,9 +71,9 @@ public class ControlProvider extends ContentProvider {
         boolean tokenOk = !privileged && ControlToken.accept(c, token);
         if (!privileged && !tokenOk) {
             Log.w(TAG, "control: refused " + caller(sender)
-                    + " token=" + ControlToken.prefix(token) + " for " + method);
-            return new Result(403,
-                    "error=refused: only adb shell, root or system may control the app");
+                    + " token=" + presented(token) + " for " + method);
+            return new Result(403, "error=refused: control needs adb shell, root,"
+                    + " system or a valid control token");
         }
         if (method == null) {
             return new Result(400, "error=missing method; use status, enable, wifi_on, pubkey, ...");
@@ -82,13 +82,13 @@ public class ControlProvider extends ContentProvider {
             // Both mint or reveal identity material. A token holder is trusted
             // to control the keeper, not to bootstrap another copy of itself.
             Log.w(TAG, "control: refused " + caller(sender)
-                    + " token=" + ControlToken.prefix(token)
+                    + " token=" + presented(token)
                     + " for shell-only " + method);
             return new Result(403, "error=refused: " + method
                     + " may only be requested from adb shell, root or system");
         }
         Log.i(TAG, "control: accepted " + caller(sender)
-                + " token=" + ControlToken.prefix(token)
+                + " token=" + presented(token)
                 + " via " + (privileged ? "uid" : "token") + " for " + method);
 
         // The positional value is the SSID for save_wifi and the mode for
@@ -122,6 +122,14 @@ public class ControlProvider extends ContentProvider {
     /** The provider has a uid; the broadcast path passes -1 and uses the token. */
     private static String caller(int sender) {
         return sender < 0 ? "broadcast sender" : "uid " + sender;
+    }
+
+    /**
+     * Whether a token was presented, for the log. Not even a prefix: a valid
+     * token's characters are the one thing that must not reach logcat.
+     */
+    private static String presented(String token) {
+        return token == null || token.isEmpty() ? "none" : "present";
     }
 
     /** The shell-only reply: the token plus where it lives, never logged. */

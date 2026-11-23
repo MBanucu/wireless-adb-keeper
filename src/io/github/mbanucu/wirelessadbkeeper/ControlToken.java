@@ -110,20 +110,6 @@ public final class ControlToken {
         return expected != null && candidate != null && equal;
     }
 
-    /** A short, log-safe prefix. Never the whole token. */
-    static String prefix(String token) {
-        if (token == null || token.isEmpty()) {
-            return "none";
-        }
-        int n = Math.min(8, token.length());
-        StringBuilder out = new StringBuilder(n + 3);
-        for (int i = 0; i < n; i++) {
-            char ch = token.charAt(i);
-            out.append(ch >= 32 && ch < 127 ? ch : '?');
-        }
-        return out.append("...").toString();
-    }
-
     private static byte[] decodeHex(String text) {
         if (text == null || text.length() != HEX) {
             return null;

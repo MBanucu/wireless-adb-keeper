@@ -313,6 +313,9 @@ token.
 ./keeperctl.sh diag
 ```
 
+It runs from the checkout; there is nothing to install. If the scripts are copied to
+`~/wireless-adb-keeper/`, copy `keeperctl.sh` beside them.
+
 The token is a capability, not a package check: any process that can read the
 600 file can drive the app, and no other app can. That is deliberate — it
 survives a Termux reinstall and works with a Termux fork whose package id is
@@ -331,9 +334,9 @@ process as `--es token ...`. On this device `/proc` is mounted
 Termux's uid can, but it can also read the 600 file. `am`/`content` have no
 environment or stdin channel for a provider extra, so avoiding argv entirely
 would need a second app with a Binder helper. The token is not echoed by the
-wrapper, written to logcat, or put in an error reply; the app logs the caller
-(or `broadcast sender`), the method and, for a presented token, only a short
-prefix.
+wrapper, written to logcat, or put in an error reply: the app logs the caller
+(or `broadcast sender`), the method and only whether a token was presented,
+never its characters.
 
 ## Diagnostics
 
