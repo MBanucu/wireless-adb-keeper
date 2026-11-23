@@ -55,6 +55,8 @@ public class MainActivity extends Activity {
     private View[] navIndicators;
     private TextView[] navLabels;
     private int page = 0;
+    private String lastStatusKey = "";
+    private final java.util.Set<String> openHints = new java.util.HashSet<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean reEnabling = false;
     private ContentObserver observer;
@@ -161,14 +163,31 @@ public class MainActivity extends Activity {
         root.addView(statusBox, matchWrap());
 
         root.addView(sectionLabel("Actions"));
-        root.addView(primary("Enable now", new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                ensureAndRefresh();
-            }
-        }));
+        action(root, "Enable now",
+                "Re-applies wireless debugging right away when Wi-Fi is connected. Safe to "
+                        + "press at any time; it only sets the switch, it changes no other setting.",
+                true, new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        ensureAndRefresh();
+                    }
+                });
 
-        serviceButton = button("Stop monitor service", new View.OnClickListener() {
+        action(root, "Turn Wi-Fi on",
+                "Android 10+ will not let an app switch Wi-Fi itself, so this asks Termux's "
+                        + "adb to run `svc wifi enable`. If Termux is missing or not trusted, the "
+                        + "Wi-Fi panel opens for a tap instead.",
+                false, new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        turnWifiOn();
+                    }
+                });
+
+        serviceButton = action(root, "Stop monitor service",
+                "Stops or restarts the foreground service that watches Wi-Fi and keeps "
+                        + "wireless debugging on. The 15-minute fallback job stays scheduled.",
+                false, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 if (MonitorService.running) {
@@ -186,7 +205,6 @@ public class MainActivity extends Activity {
                 }, 500);
             }
         });
-        root.addView(serviceButton);
         return scrollOf(root);
     }
 
@@ -196,7 +214,11 @@ public class MainActivity extends Activity {
                 "Choose how this phone rejoins Wi-Fi and keep the adb port stable.");
 
         root.addView(sectionLabel("Reconnect"));
-        root.addView(primary("Connect now", new View.OnClickListener() {
+        action(root, "Connect now",
+                "Asks Android to join the saved network now: a Wi-Fi suggestion in auto mode, "
+                        + "or a local link in local-only mode. In auto mode approve the system "
+                        + "notification once and later reconnects happen silently.",
+                true, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 if (!LocalWifi.isAutoMode(MainActivity.this) && !LocalWifi.supported()) {
@@ -219,9 +241,14 @@ public class MainActivity extends Activity {
                     }
                 }, 1500);
             }
-        }));
+        });
 
-        localButton = button("Connect mode: auto-connect", new View.OnClickListener() {
+        localButton = action(root, "Connect mode: auto-connect",
+                "Switches how the phone rejoins the network. auto-connect registers a Wi-Fi "
+                        + "suggestion Android applies silently, even after reboot. local-only holds a "
+                        + "local link that can never carry internet, but needs a tap and the password "
+                        + "on every reconnect.",
+                false, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 boolean toLocal = LocalWifi.isAutoMode(MainActivity.this);
@@ -234,10 +261,13 @@ public class MainActivity extends Activity {
                 refreshStatus();
             }
         });
-        root.addView(localButton);
 
         root.addView(sectionLabel("ADB port"));
-        root.addView(button("Pin adb port " + PinnedPort.PORT + " now", new View.OnClickListener() {
+        action(root, "Pin adb port " + PinnedPort.PORT + " now",
+                "Sends `adb tcpip 5555` through Termux right now, so adbd listens on the fixed "
+                        + "port even after it restarts. The monitor service otherwise does this "
+                        + "automatically when the port closes.",
+                false, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 new Thread(new Runnable() {
@@ -254,7 +284,7 @@ public class MainActivity extends Activity {
                     }
                 }).start();
             }
-        }));
+        });
 
         return scrollOf(root);
     }
@@ -282,7 +312,11 @@ public class MainActivity extends Activity {
         passHint.setLineSpacing(dp(2), 1f);
         root.addView(passHint);
 
-        root.addView(button("Save SSID and password", new View.OnClickListener() {
+        action(root, "Save SSID and password",
+                "Stores the network name and password used in local-only mode. Auto-connect "
+                        + "mode does not need the password, only the saved network name for the "
+                        + "suggestion.",
+                false, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 LocalWifi.setSsid(MainActivity.this, ssidField.getText().toString());
@@ -292,7 +326,7 @@ public class MainActivity extends Activity {
                 toast("Saved: " + LocalWifi.ssid(MainActivity.this));
                 refreshStatus();
             }
-        }));
+        });
         return scrollOf(root);
     }
 
@@ -301,16 +335,23 @@ public class MainActivity extends Activity {
         pageHeader(root, "Help", "One-time setup, background behaviour, and options.");
 
         root.addView(sectionLabel("Keep-alive"));
-        root.addView(button("Schedule keep-alive (every 15 min)", new View.OnClickListener() {
+        action(root, "Schedule keep-alive (every 15 min)",
+                "Registers the periodic JobScheduler fallback that re-applies wireless "
+                        + "debugging every 15 minutes. It is registered automatically at boot; "
+                        + "this button is for doing it by hand.",
+                false, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 scheduleJobs(MainActivity.this);
                 toast("Keep-alive scheduled");
                 refreshStatus();
             }
-        }));
+        });
 
-        root.addView(button("Open Developer options", new View.OnClickListener() {
+        action(root, "Open Developer options",
+                "Opens Android's Developer options, where Wireless debugging and its pairing "
+                        + "codes live. Nothing is changed by opening it.",
+                false, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 try {
@@ -319,7 +360,7 @@ public class MainActivity extends Activity {
                     toast("Could not open settings: " + e);
                 }
             }
-        }));
+        });
 
         root.addView(sectionLabel("How it works"));
         TextView help = text("One-time setup (already done if the status shows permission granted):\n\n"
@@ -486,6 +527,14 @@ public class MainActivity extends Activity {
         return e;
     }
 
+    /** Adds a full-width action with its own "i" note underneath. */
+    private Button action(LinearLayout root, String label, String help, boolean primary,
+                          View.OnClickListener listener) {
+        Button b = primary ? primary(label, listener) : button(label, listener);
+        root.addView(infoRow(b, help, 8));
+        return b;
+    }
+
     // One filled button for the thing people came to do, flat ones for the rest.
     private Button primary(String label, View.OnClickListener listener) {
         Button b = button(label, listener);
@@ -555,6 +604,36 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void turnWifiOn() {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final String result = WifiRadio.enable(MainActivity.this);
+                handler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (result == null) {
+                            toast("Turn Wi-Fi on in the panel that opens");
+                            try {
+                                startActivity(WifiRadio.panel());
+                            } catch (Exception e) {
+                                toast("Could not open Wi-Fi settings: " + e);
+                            }
+                            return;
+                        }
+                        toast(result);
+                        handler.postDelayed(new Runnable() {
+                            @Override
+                            public void run() {
+                                refreshStatus();
+                            }
+                        }, 2500);
+                    }
+                });
+            }
+        }).start();
+    }
+
     private void ensureAndRefresh() {
         final Context ctx = this;
         new Thread(new Runnable() {
@@ -574,29 +653,46 @@ public class MainActivity extends Activity {
 
     private void refreshStatus() {
         if (statusBox == null) return;
-        statusBox.removeAllViews();
 
         boolean permission = Ensurer.hasPermission(this);
-        addRow("Permission", permission ? "granted" : "not granted", permission ? OK : BAD);
-        if (LocalWifi.supported()) {
-            boolean location = LocalWifi.hasLocationPermission(this);
-            addRow("Location", location ? "granted" : "not granted", location ? OK : BAD);
-        }
         boolean wifi = Ensurer.isWifiConnected(this);
-        addRow("Wi-Fi", wifi ? "connected" : "not connected", wifi ? OK : null);
         boolean wireless = Ensurer.isWirelessDebuggingOn(this);
-        addRow("Wireless", wireless ? "on" : "off", wireless ? OK : BAD);
         boolean running = MonitorService.running;
+        boolean autoMode = LocalWifi.isAutoMode(this);
+        boolean job = isJobScheduled();
+        String location = LocalWifi.supported()
+                ? (LocalWifi.hasLocationPermission(this) ? "granted" : "not granted") : null;
+        String port = PinnedPort.state();
+        String link = running ? LocalWifi.state : "off";
+        String detail = running ? LocalWifi.detail : null;
+
+        // Rebuild only on a real change, so an expanded note is not thrown away
+        // and the two-second tick does not churn views.
+        StringBuilder key = new StringBuilder()
+                .append(permission).append('|').append(location).append('|').append(wifi)
+                .append('|').append(wireless).append('|').append(running).append('|')
+                .append(port).append('|').append(autoMode).append('|').append(link)
+                .append('|').append(detail).append('|').append(job);
+        if (key.toString().equals(lastStatusKey)) return;
+        lastStatusKey = key.toString();
+
+        statusBox.removeAllViews();
+        addRow("Permission", permission ? "granted" : "not granted", permission ? OK : BAD);
+        if (location != null) {
+            addRow("Location", location, "granted".equals(location) ? OK : BAD);
+        }
+        addRow("Wi-Fi", wifi ? "connected" : "not connected", wifi ? OK : null);
+        addRow("Wireless", wireless ? "on" : "off", wireless ? OK : BAD);
         addRow("Service", running ? "running" : "stopped", running ? OK : BAD);
-        addRow("Pinned port", PinnedPort.state());
-        addRow("Mode", LocalWifi.isAutoMode(this) ? "auto-connect" : "local-only");
-        if (!LocalWifi.isAutoMode(this)) {
-            addRow("Local link", running ? LocalWifi.state : "off");
+        addRow("Pinned port", port);
+        addRow("Mode", autoMode ? "auto-connect" : "local-only");
+        if (!autoMode) {
+            addRow("Local link", link);
         }
-        if (running && LocalWifi.detail != null && !LocalWifi.detail.isEmpty()) {
-            addRow("Last result", LocalWifi.detail);
+        if (detail != null && !detail.isEmpty()) {
+            addRow("Last result", detail);
         }
-        addRow("Job", isJobScheduled() ? "scheduled" : "not scheduled");
+        addRow("Job", job ? "scheduled" : "not scheduled");
 
         if (serviceButton != null) {
             serviceButton.setText(MonitorService.running ? "Stop monitor service" : "Start monitor service");
@@ -616,6 +712,7 @@ public class MainActivity extends Activity {
         if (statusBox == null) return;
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(0, dp(7), 0, dp(7));
 
         TextView name = text(label, 13, MUTED);
@@ -628,7 +725,104 @@ public class MainActivity extends Activity {
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         row.addView(val);
 
-        statusBox.addView(row, matchWrap());
+        statusBox.addView(infoRow(row, statusHint(label), 0), matchWrap());
+    }
+
+    /**
+     * Wraps one row of content with a circled "i" that expands a plain-language
+     * note underneath. Expanding in place keeps the page still, and every note
+     * stays readable instead of sitting behind a dialog.
+     */
+    private View infoRow(View content, String hint, int topDp) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.addView(content, new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        final boolean wasOpen = openHints.contains(hint);
+        final TextView detail = text(hint, 12, MUTED);
+        detail.setLineSpacing(dp(2), 1f);
+        detail.setPadding(0, dp(6), dp(6), dp(2));
+        detail.setVisibility(wasOpen ? View.VISIBLE : View.GONE);
+
+        final TextView icon = text("i", 14, wasOpen ? ACCENT : MUTED);
+        icon.setTypeface(Typeface.DEFAULT_BOLD);
+        icon.setGravity(Gravity.CENTER);
+        icon.setContentDescription("Explain this");
+        icon.setBackground(rounded(0x00000000, dp(18), dp(1),
+                wasOpen ? ACCENT : 0xFFC3C8D2));
+        icon.setOnClickListener(new View.OnClickListener() {
+            private boolean open = wasOpen;
+
+            @Override
+            public void onClick(View v) {
+                open = !open;
+                if (open) {
+                    openHints.add(hint);
+                } else {
+                    openHints.remove(hint);
+                }
+                detail.setVisibility(open ? View.VISIBLE : View.GONE);
+                icon.setTextColor(open ? ACCENT : MUTED);
+                ((GradientDrawable) icon.getBackground()).setStroke(
+                        dp(1), open ? ACCENT : 0xFFC3C8D2);
+            }
+        });
+        LinearLayout.LayoutParams iconLp = new LinearLayout.LayoutParams(dp(36), dp(36));
+        iconLp.leftMargin = dp(8);
+        row.addView(icon, iconLp);
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setLayoutParams(spaced(matchWrap(), topDp));
+        box.addView(row, matchWrap());
+        box.addView(detail, matchWrap());
+        return box;
+    }
+
+    private String statusHint(String label) {
+        if ("Permission".equals(label)) {
+            return "WRITE_SECURE_SETTINGS, granted once over adb with pm grant. Without it the "
+                    + "app cannot change wireless debugging at all, so every other row reads off.";
+        }
+        if ("Location".equals(label)) {
+            return "Android 10+ requires Location before an app may read or change Wi-Fi "
+                    + "networks. It is used for Wi-Fi only, never to track where you are.";
+        }
+        if ("Wi-Fi".equals(label)) {
+            return "Whether the phone is on a Wi-Fi network right now. The keeper only "
+                    + "re-enables wireless debugging while this is connected.";
+        }
+        if ("Wireless".equals(label)) {
+            return "Android's Wireless debugging switch in Developer options. This is the "
+                    + "setting the app exists to keep on.";
+        }
+        if ("Service".equals(label)) {
+            return "The foreground service that watches Wi-Fi and re-applies wireless "
+                    + "debugging the moment it is needed. Stopping it leaves only the job.";
+        }
+        if ("Pinned port".equals(label)) {
+            return "Whether adbd answers on 127.0.0.1:5555, the fixed port a laptop connects "
+                    + "to. It is kept open by Termux's adb, not by this app.";
+        }
+        if ("Mode".equals(label)) {
+            return "How the phone rejoins the network. auto-connect registers a Wi-Fi "
+                    + "suggestion Android applies silently; local-only holds a local link and "
+                    + "needs the password each time.";
+        }
+        if ("Local link".equals(label)) {
+            return "The state of the last local-only connection request.";
+        }
+        if ("Last result".equals(label)) {
+            return "The most recent thing the app did, or was told by Android, during a "
+                    + "connection attempt.";
+        }
+        if ("Job".equals(label)) {
+            return "A 15-minute JobScheduler task that re-applies wireless debugging as a "
+                    + "fallback, including after a reboot.";
+        }
+        return "No description for this row yet.";
     }
 
     private boolean isJobScheduled() {

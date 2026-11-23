@@ -75,6 +75,11 @@ public final class PinnedPort {
                 && c.checkSelfPermission(TERMUX_PERM) == PackageManager.PERMISSION_GRANTED;
     }
 
+    /** Runs a Termux script on the app's behalf; used by {@link WifiRadio}. */
+    static boolean runScript(Context c, String script) {
+        return askTermux(c, script);
+    }
+
     /** Probe, and ask Termux when the port is closed. Safe from any thread. */
     public static String check(Context c) {
         return check(c, false);
@@ -113,10 +118,14 @@ public final class PinnedPort {
     }
 
     private static boolean askTermux(Context c) {
+        return askTermux(c, SCRIPT);
+    }
+
+    private static boolean askTermux(Context c, String script) {
         Intent intent = new Intent();
         intent.setClassName(TERMUX_PKG, RUN_SERVICE);
         intent.setAction(RUN_ACTION);
-        intent.putExtra("com.termux.RUN_COMMAND_PATH", SCRIPT);
+        intent.putExtra("com.termux.RUN_COMMAND_PATH", script);
         intent.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", new String[0]);
         intent.putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME);
         intent.putExtra("com.termux.RUN_COMMAND_BACKGROUND", true);
@@ -124,7 +133,7 @@ public final class PinnedPort {
         intent.putExtra("com.termux.RUN_COMMAND_SESSION_ACTION", "0");
         try {
             c.startService(intent);
-            Log.i(Ensurer.TAG, "pin: asked Termux to run " + SCRIPT);
+            Log.i(Ensurer.TAG, "asked Termux to run " + script);
             return true;
         } catch (Exception e) {
             // Android 8+ refuses a background service start; only the monitor

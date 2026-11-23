@@ -41,6 +41,9 @@ Neither half can be solved by the app alone:
 - `PinnedPort` — probes `127.0.0.1:5555` every minute and, when nothing listens, asks
   Termux to run `pin-adb-port.sh` through Termux's own `RUN_COMMAND` API. All the
   decisions (when to ask, how often, whether Termux is usable) live here.
+- `WifiRadio` — switches the Wi-Fi radio on. Apps lost that right in Android 10, so it
+  asks Termux to run `wifi-on.sh` (`svc wifi enable` as the shell user) and falls back
+  to opening the Wi-Fi panel when Termux cannot help.
 - Boot receiver + periodic job as fallbacks.
 
 **Termux scripts (`*.sh`, `*.py`)**
@@ -50,6 +53,9 @@ Neither half can be solved by the app alone:
   TCP scan of 30000–50000. Single instance, wake lock held, rotating log.
 - `pin-adb-port.sh` — attaches to adbd (a serial the keepalive already holds, then
   mDNS, then a scan) and sends `adb tcpip 5555`. Run by the app, not by hand.
+- `wifi-on.sh` — turns the Wi-Fi radio on with `svc wifi enable` over Termux's adb,
+  which keeps working with the radio off because it goes through loopback. Run by the
+  app's **Turn Wi-Fi on** button.
 - `adb-mdns.py` — reads adbd's own `_adb-tls-connect._tcp` advertisement with
   `python-zeroconf`, filters out stale advertisements, and prints the live port.
   Needs `pip install zeroconf`; without it the keepalive falls back to scanning.
@@ -123,12 +129,21 @@ adb shell pm grant com.example.wifidebug android.permission.POST_NOTIFICATIONS
 adb shell pm grant com.example.wifidebug com.termux.permission.RUN_COMMAND
 ```
 
-The `RUN_COMMAND` grant is only needed for the fixed port (see below), and only
-works once the installed APK declares it — granting it to an older build is a
+The `RUN_COMMAND` grant is needed for the fixed port and for the **Turn Wi-Fi on**
+button (see below), and only works once the installed APK declares it — granting it to an older build is a
 silent no-op. Losing it does not break anything loudly: the app keeps running and
 keeps logging, and only `pin check: closed (grant com.termux.permission.RUN_COMMAND)`
 in logcat says why the port never comes back — which is exactly the situation in
 which there is no cable to fix it with. Hence the script.
+
+Both scripts the app runs live in `~/wireless-adb-keeper/`, so copy them there and mark
+them executable:
+
+```bash
+mkdir -p ~/wireless-adb-keeper
+cp pin-adb-port.sh wifi-on.sh ~/wireless-adb-keeper/
+chmod +x ~/wireless-adb-keeper/*.sh
+```
 
 Open the app, enter the Wi-Fi SSID and password, tap **Save**, then **Connect now** and
 approve the "available networks" notification once. Leave **Connect mode** on
