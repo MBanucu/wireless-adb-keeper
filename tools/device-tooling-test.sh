@@ -777,6 +777,25 @@ else
     check "--restore removed its snapshot" 1
 fi
 
+# 19b. A normal run that first repairs a dead snapshot must reinstall its own
+# cleanup traps; otherwise the fresh snapshot and any suite changes survive.
+reset
+mkdir -p "$DEVSTATE"
+printf 'ready\n' > "$DEVSTATE/ready"
+printf 'auto-connect\n' > "$DEVSTATE/mode"
+printf 'Home\n' > "$DEVSTATE/ssid"
+printf 'present\n' > "$DEVSTATE/passphrase"
+printf 'running\n' > "$DEVSTATE/service"
+: > "$DEVSTATE/perms"
+printf 'local-only\n' > "$STATE/mode"
+run_case "a normal run after a dead snapshot passes" 0 -- --only pass
+if [ -d "$DEVSTATE" ]; then
+    check "a normal run after repair removes its new snapshot" 0
+    find "$DEVSTATE" -maxdepth 2 -print 2>&1 | sed 's/^/     | /'
+else
+    check "a normal run after repair removes its new snapshot" 1
+fi
+
 # 20. --restore with nothing saved is a successful no-op.
 reset
 run_case "--restore with nothing saved" 0 -- --restore

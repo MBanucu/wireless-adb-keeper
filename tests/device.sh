@@ -359,6 +359,12 @@ if [ -f "$DEVICE_STATE/ready" ]; then
         exit 1
     fi
     rm -rf "$DEVICE_STATE"
+    # state_restore() clears every trap while it works; the normal run that
+    # follows still needs its own cleanup, or a killed suite would leave the
+    # fresh snapshot and the phone changed.
+    trap cleanup EXIT
+    trap 'interrupted 130' INT
+    trap 'interrupted 143' TERM
 fi
 
 # Setup may heal an empty device list, but only with --connect, and every
