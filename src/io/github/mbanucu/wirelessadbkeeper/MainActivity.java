@@ -810,6 +810,8 @@ public class MainActivity extends Activity {
         String location = LocalWifi.supported()
                 ? (LocalWifi.hasLocationPermission(this) ? "granted" : "not granted") : null;
         String port = PinnedPort.state();
+        String pinResult = PinnedPort.result();
+        String wifiResult = WifiRadio.result();
         String link = running ? LocalWifi.state : "off";
         String detail = running ? LocalWifi.detail : null;
 
@@ -818,7 +820,8 @@ public class MainActivity extends Activity {
         StringBuilder key = new StringBuilder()
                 .append(permission).append('|').append(location).append('|').append(wifi)
                 .append('|').append(wireless).append('|').append(running).append('|')
-                .append(port).append('|').append(autoMode).append('|').append(link)
+                .append(port).append('|').append(pinResult).append('|')
+                .append(wifiResult).append('|').append(autoMode).append('|').append(link)
                 .append('|').append(detail).append('|').append(job);
         if (key.toString().equals(lastStatusKey)) return;
         lastStatusKey = key.toString();
@@ -832,6 +835,10 @@ public class MainActivity extends Activity {
         addRow("Wireless", wireless ? "on" : "off", wireless ? OK : BAD);
         addRow("Service", running ? "running" : "stopped", running ? OK : BAD);
         addRow("Pinned port", port);
+        addRow("Pin result", pinResult, resultColor(pinResult));
+        if (!"none".equals(wifiResult)) {
+            addRow("Wi-Fi script", wifiResult, resultColor(wifiResult));
+        }
         addRow("Mode", autoMode ? "auto-connect" : "local-only");
         if (!autoMode) {
             addRow("Local link", link);
@@ -852,6 +859,14 @@ public class MainActivity extends Activity {
 
     private void addRow(String label, String value) {
         addRow(label, value, null);
+    }
+
+    /** Green for a script that said it worked, red for a script error. */
+    private Integer resultColor(String value) {
+        if (value == null || "none".equals(value)) return null;
+        if (value.startsWith("error=") || value.startsWith("no RESULT")) return BAD;
+        if (value.contains("(exit 0)")) return OK;
+        return null;
     }
 
     // A label column of fixed width keeps every value lined up without monospace.
@@ -952,6 +967,16 @@ public class MainActivity extends Activity {
         if ("Pinned port".equals(label)) {
             return "Whether adbd answers on 127.0.0.1:5555, the fixed port a laptop connects "
                     + "to. It is kept open by Termux's adb, not by this app.";
+        }
+        if ("Pin result".equals(label)) {
+            return "The last line Termux's pin-adb-port.sh printed, plus its exit code and "
+                    + "the first stderr line. Termux 0.109+ sends this back through "
+                    + "RUN_COMMAND_PENDING_INTENT; older builds show 'none' and only the port "
+                    + "probe is available, which is journalled as pin.fallback.";
+        }
+        if ("Wi-Fi script".equals(label)) {
+            return "The last RESULT line from wifi-on.sh, which the Turn Wi-Fi on button runs "
+                    + "through Termux. It reports whether svc wifi enable left Wi-Fi on.";
         }
         if ("Mode".equals(label)) {
             return "How the phone rejoins the network. auto-connect registers a Wi-Fi "

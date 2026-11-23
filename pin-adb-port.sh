@@ -12,6 +12,9 @@
 #   ADB_PIN_PORT   port to pin (default 5555)
 # Log:    pin-adb-port.log
 # Exit:   0 pinned, 1 nothing to attach to (wireless debugging off / no adbd)
+# Result: the last stdout line is machine readable, for the app:
+#   RESULT pinned=5555 | RESULT skipped=running
+#   RESULT error=no-adbd | RESULT error=port-closed port=5555
 
 set -u
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || exit 1
@@ -36,6 +39,7 @@ if [ -f "$PIDFILE" ]; then
     old=$(cat "$PIDFILE" 2>/dev/null)
     if [ -n "${old:-}" ] && tr '\0' ' ' < "/proc/$old/cmdline" 2>/dev/null | grep -q pin-adb-port; then
         log "already running (pid $old), exiting"
+        echo "RESULT skipped=running"
         exit 0
     fi
 fi
@@ -52,6 +56,7 @@ pinned() {
 
 if pinned; then
     log "already pinned on $PORT"
+    echo "RESULT pinned=$PORT"
     exit 0
 fi
 
@@ -100,12 +105,14 @@ fi
 
 if [ -z "$found" ]; then
     log "no adbd to attach to (wireless debugging off, or no Wi-Fi link)"
+    echo "RESULT error=no-adbd"
     exit 1
 fi
 
 for _ in 1 2 3 4 5; do
     if pinned; then
         log "pinned: 127.0.0.1:$PORT"
+        echo "RESULT pinned=$PORT"
         exit 0
     fi
     timeout 5 adb connect "127.0.0.1:$PORT" >/dev/null 2>&1
@@ -113,4 +120,5 @@ for _ in 1 2 3 4 5; do
 done
 
 log "port $PORT did not come up after tcpip"
+echo "RESULT error=port-closed port=$PORT"
 exit 1

@@ -34,9 +34,9 @@ import java.util.TimeZone;
  *
  * <p>Every entry is one line: {@code time uptime level code detail}. The level
  * is info, warn or error; the code is a stable {@code area.action} string
- * (`boot.received`, `svc.start`, `ensure.changed`, `pin.state`,
- * `wifi.suggest.added`, ...) so a report can be searched and a test can assert on
- * it instead of on prose.
+ * (`boot.received`, `svc.start`, `ensure.changed`, `pin.state`, `pin.result`,
+ * `pin.fallback`, `wifi.suggest.added`, ...) so a report can be searched and a
+ * test can assert on it instead of on prose.
  *
  * <p>Two rules are enforced here rather than trusted: the journal is capped
  * (events and bytes) and it never throws. A diagnostics path that fills the
@@ -158,6 +158,8 @@ public final class Diag {
         });
         put(out, "wifi_connected", () -> String.valueOf(Ensurer.isWifiConnected(c)));
         put(out, "port_5555", PinnedPort::state);
+        put(out, "pin_result", PinnedPort::result);
+        put(out, "wifi_result", WifiRadio::result);
         put(out, "termux_installed", () -> String.valueOf(PinnedPort.hasTermux(c)));
         put(out, "termux_grant", () -> String.valueOf(PinnedPort.termuxUsable(c)));
         put(out, "last_result", () -> LocalWifi.detail == null || LocalWifi.detail.isEmpty()
