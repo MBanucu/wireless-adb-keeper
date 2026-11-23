@@ -7,6 +7,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketException;
 import java.nio.charset.Charset;
 
 /**
@@ -25,7 +26,8 @@ import java.nio.charset.Charset;
  * gives the app one, this is verified from the host side with Termux's key.
  */
 public final class AdbClient implements Closeable {
-    private static final Charset ASCII = Charset.forName("US-ASCII");
+    /** ADB strings are UTF-8; shell output is not limited to ASCII. */
+    private static final Charset UTF8 = Charset.forName("UTF-8");
 
     private static final int A_CNXN = 0x4e584e43;
     private static final int A_AUTH = 0x48545541;
@@ -82,7 +84,8 @@ public final class AdbClient implements Closeable {
     private void handshake() throws IOException {
         // No feature flags: legacy shell output is easier to consume, and
         // nothing here needs shell_v2's exit-code framing.
-        send(A_CNXN, VERSION, MAX_PAYLOAD, "host::\0".getBytes(ASCII));
+        send(A_CNXN, VERSION, MAX_PAYLOAD, "host::\0".getBytes(UTF8));
+        int authAttempts = 0;
         while (true) {
             Message m = read();
             if (m.command == A_CNXN) {
@@ -93,6 +96,9 @@ public final class AdbClient implements Closeable {
                 throw new IOException("unexpected " + commandName(m.command) + " during handshake");
             }
             if (m.arg0 == AUTH_TOKEN) {
+                if (++authAttempts > 2) {
+                    throw new IOException("adbd kept asking for authentication");
+                }
                 if (!sentSignature) {
                     sentSignature = true;
                     send(A_AUTH, AUTH_SIGNATURE, 0, key.sign(m.payload));
@@ -122,7 +128,7 @@ public final class AdbClient implements Closeable {
      */
     public String service(String destination) throws IOException {
         int localId = nextId++;
-        send(A_OPEN, localId, 0, (destination + "\0").getBytes(ASCII));
+        send(A_OPEN, localId, 0, (destination + "\0").getBytes(UTF8));
         StringBuilder output = new StringBuilder();
         int remoteId = -1;
         while (true) {
@@ -137,7 +143,7 @@ public final class AdbClient implements Closeable {
             if (m.command == A_OKAY) {
                 remoteId = m.arg0;
             } else if (m.command == A_WRTE) {
-                output.append(new String(m.payload, ASCII));
+                output.append(new String(m.payload, UTF8));
                 if (remoteId >= 0) {
                     send(A_OKAY, localId, remoteId, EMPTY);
                 }
@@ -158,11 +164,24 @@ public final class AdbClient implements Closeable {
     /**
      * Asks adbd to listen on a fixed TCP port ({@code adb tcpip}).
      *
+     * <p>adbd acknowledges this service by restarting, which tears down the
+     * transport that sent the request. A closed socket after the request is
+     * therefore the acknowledgement, not a failure — the caller has to
+     * reconnect before it can tell whether the new port came up.
+     *
      * @return true when adbd acknowledged the request
      */
     public boolean tcpip(int port) throws IOException {
-        service("tcpip:" + port);
-        return true;
+        try {
+            service("tcpip:" + port);
+            return true;
+        } catch (EOFException e) {
+            return true;
+        } catch (SocketException e) {
+            // "Connection reset" / "Broken pipe" while adbd restarts. Timeouts
+            // and protocol errors are still reported to the caller.
+            return true;
+        }
     }
 
     @Override
@@ -248,7 +267,7 @@ public final class AdbClient implements Closeable {
         while (end > 0 && m.payload[end - 1] == 0) {
             end--;
         }
-        return new String(m.payload, 0, end, ASCII);
+        return new String(m.payload, 0, end, UTF8);
     }
 
     private static String commandName(int command) {

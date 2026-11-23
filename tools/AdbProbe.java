@@ -15,14 +15,16 @@ import java.nio.file.Paths;
  * <pre>
  * javac -d /tmp/probe src/.../AdbClient.java src/.../AdbKey.java tools/AdbProbe.java
  * java -cp /tmp/probe io.github.mbanucu.wirelessadbkeeper.AdbProbe ~/.android/adbkey
- * java -cp /tmp/probe ... AdbProbe ~/.android/adbkey 5555 --tcpip
+ * java -cp /tmp/probe ... AdbProbe ~/.android/adbkey [port] [pinPort] --tcpip
  * </pre>
  *
- * {@code --tcpip} sends {@code tcpip:5555} and times how long until a fresh
- * authenticated connection to 5555 works. That is the number that matters for
- * the app's re-pin path, and it is deliberately measured by reconnecting rather
- * than by watching the old socket: during an adbd restart the previous listener
- * can still accept TCP for a moment before the new one is ready.
+ * {@code --tcpip} sends {@code tcpip:<pinPort>} (5555 by default) and times how
+ * long until a fresh authenticated connection to that port works. That is the
+ * number that matters for the app's re-pin path, and it is deliberately measured
+ * by reconnecting rather than by watching the old socket: during an adbd restart
+ * the previous listener can still accept TCP for a moment before the new one is
+ * ready. The initial {@code port} may be the TLS port; the pinned port is a
+ * separate argument because it is the one being measured.
  */
 public final class AdbProbe {
     private static final Charset UTF8 = Charset.forName("UTF-8");
@@ -41,6 +43,7 @@ public final class AdbProbe {
                 ? positional.get(0)
                 : System.getProperty("user.home") + "/.android/adbkey";
         int port = positional.size() > 1 ? Integer.parseInt(positional.get(1)) : 5555;
+        int pinPort = positional.size() > 2 ? Integer.parseInt(positional.get(2)) : 5555;
 
         AdbKey key = AdbKey.fromPkcs8Pem(new String(Files.readAllBytes(Paths.get(keyPath)), UTF8));
         System.out.println("key      " + key.publicKeyBase64().substring(0, 16) + "... ("
@@ -49,7 +52,8 @@ public final class AdbProbe {
         // The encoder is only right if it reproduces adb's own output.
         String published = new String(Files.readAllBytes(Paths.get(keyPath + ".pub")), UTF8);
         String expected = published.trim().split("\\s+")[0];
-        System.out.println("pubkey   " + (expected.equals(key.publicKeyBase64())
+        boolean pubkeyMatches = expected.equals(key.publicKeyBase64());
+        System.out.println("pubkey   " + (pubkeyMatches
                 ? "matches " + keyPath + ".pub"
                 : "DIFFERS from " + keyPath + ".pub"));
 
@@ -62,11 +66,17 @@ public final class AdbProbe {
             System.out.println("echo     " + client.shell("echo probe-ok").trim());
         }
         if (tcpip) {
-            repin(key, port);
+            repin(key, pinPort);
+        }
+        if (!pubkeyMatches) {
+            // A mismatch means the public-key encoder is wrong, even though the
+            // private key still authenticates. Fail the probe so it cannot be
+            // mistaken for a pass in a script.
+            throw new IllegalStateException("encoded public key differs from " + keyPath + ".pub");
         }
     }
 
-    /** Sends {@code tcpip} and measures until 5555 authenticates again. */
+    /** Sends {@code tcpip} and measures until the pinned port authenticates again. */
     private static void repin(AdbKey key, int port) throws Exception {
         System.out.println("re-pin   sending tcpip:" + port);
         long start = System.nanoTime();

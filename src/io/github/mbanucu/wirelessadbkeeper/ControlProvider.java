@@ -25,7 +25,8 @@ import java.util.Map;
  * real check and not a guess.
  *
  * The reply bundle carries "code" (0 ok, 4xx/5xx error) and "data": one
- * key=value line per field for `status`, one line for everything else.
+ * key=value line per field for `status` and `pubkey`, one line for everything
+ * else.
  */
 public class ControlProvider extends ContentProvider {
     private static final String TAG = Ensurer.TAG;

@@ -6,7 +6,6 @@ import java.security.KeyFactory;
 import java.security.PrivateKey;
 import java.security.interfaces.RSAPrivateCrtKey;
 import java.security.spec.PKCS8EncodedKeySpec;
-import java.util.Base64;
 
 import javax.crypto.Cipher;
 
@@ -37,13 +36,13 @@ public final class AdbKey {
     private AdbKey(PrivateKey privateKey, byte[] publicKey) {
         this.privateKey = privateKey;
         this.publicKey = publicKey;
-        this.publicKeyBase64 = Base64.getEncoder().encodeToString(publicKey);
+        this.publicKeyBase64 = Base64Codec.encode(publicKey);
     }
 
     /** Reads an unencrypted PKCS#8 PEM block. */
     public static AdbKey fromPkcs8Pem(String pem) {
         String body = pem.replaceAll("-----(BEGIN|END) [A-Z ]+-----", "").replaceAll("\\s", "");
-        return fromPkcs8(Base64.getDecoder().decode(body));
+        return fromPkcs8(Base64Codec.decode(body));
     }
 
     /** Reads the DER of an unencrypted PKCS#8 private key. */
@@ -64,6 +63,11 @@ public final class AdbKey {
         }
         RSAPrivateCrtKey rsa = (RSAPrivateCrtKey) key;
         return new AdbKey(key, encodePublicKey(rsa.getModulus(), rsa.getPublicExponent()));
+    }
+
+    /** The key itself, for the TLS layer that pairing builds on. */
+    PrivateKey privateKey() {
+        return privateKey;
     }
 
     /** The 524-byte Android public key structure. */

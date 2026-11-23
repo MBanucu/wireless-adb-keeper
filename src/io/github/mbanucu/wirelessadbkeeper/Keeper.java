@@ -8,7 +8,6 @@ import android.content.Intent;
 import android.os.Build;
 
 import java.io.File;
-import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -125,7 +124,7 @@ public final class Keeper {
             return "pubkey=" + key.publicKeyBase64()
                     + "\nname=" + AdbIdentity.KEY_NAME
                     + "\npath=" + new File(AdbIdentity.dir(c), AdbIdentity.KEY_FILE);
-        } catch (IOException e) {
+        } catch (Exception e) {
             return "error=" + e.getMessage();
         }
     }
