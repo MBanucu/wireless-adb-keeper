@@ -76,14 +76,28 @@
         </receiver>
 
         <!-- The adb command surface: "adb shell content call" against this
-             authority. It is exported, but callers are checked against the
-             caller uid inside ControlProvider, so only shell, root or system
-             get through. A provider is used instead of a receiver because the
-             platform drops broadcasts to a force-stopped or new app. -->
+             authority. It is exported, but callers are checked inside
+             ControlProvider (uid, or the control token), so only shell, root,
+             system, the app itself or a token holder get through. A provider
+             is used instead of a receiver because the platform starts it even
+             when the app was force-stopped or only just installed. -->
         <provider
             android:name=".ControlProvider"
             android:authorities="io.github.mbanucu.wirelessadbkeeper.control"
             android:exported="true" />
+
+        <!-- Termux cannot use `content call`: the `content` command needs the
+             signature permission ACCESS_CONTENT_PROVIDERS_EXTERNALLY, which
+             only shell and root hold. This exported ordered broadcast is the
+             app-reachable twin, with the same dispatch and the token gate;
+             keeperctl.sh uses it. -->
+        <receiver
+            android:name=".ControlReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="io.github.mbanucu.wirelessadbkeeper.CONTROL" />
+            </intent-filter>
+        </receiver>
 
         <!-- Exported, but only to holders of WRITE_SECURE_SETTINGS (shell, root,
              system and the app itself): Android 12+ refuses to let a background
