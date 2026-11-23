@@ -131,6 +131,7 @@ val compileProbes = tasks.register<JavaCompile>("compileProbes") {
         file("src/io/github/mbanucu/wirelessadbkeeper/AdbKey.java"),
         file("src/io/github/mbanucu/wirelessadbkeeper/AdbClient.java"),
         file("src/io/github/mbanucu/wirelessadbkeeper/AdbIdentity.java"),
+        file("src/io/github/mbanucu/wirelessadbkeeper/AdbCertificate.java"),
         file("src/io/github/mbanucu/wirelessadbkeeper/Base64Codec.java"),
     )
     classpath = files(bootClasspath)
