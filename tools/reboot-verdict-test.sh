@@ -62,6 +62,18 @@ expect() {
     printf 'ok   %s\n' "$name"
 }
 
+contains() {
+    # contains <text> <name>: the previous expect's stdout must name it.
+    total=$((total + 1))
+    if grep -qF -- "$1" "$TMP/out"; then
+        printf 'ok   %s\n' "$2"
+    else
+        failed=$((failed + 1))
+        printf 'FAIL %s: output does not contain %s\n' "$2" "$1"
+        sed 's/^/  /' "$TMP/out"
+    fi
+}
+
 record() {
     FIXTURE="$PRE" KEEPER="$KEEPER" REBOOT_VERDICT_STATE="$STATE" \
         bash "$TOOL" record --quiet
@@ -87,12 +99,21 @@ print((t + datetime.timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))
 PY
 )
 
-cat >"$POST" <<EOF
+# A journal line's timestamp is its wall clock, so on one boot every line
+# shares the same `timestamp - uptime` boot instant. Build them that way.
+at() {
+    date -u -d "$boot_ts + $1 seconds" +%Y-%m-%dT%H:%M:%SZ
+}
+
+boot_fixture() {
+    # boot_fixture <out> <marker-delay-s> <process-delay-s> <unlock phrase>
+    local out=$1 marker=$2 process=$3 unlock=$4
+    cat >"$out" <<EOF
 app_version=1.9 (10)
 android=15 (sdk 35)
 boot_id=101
-uptime_s=60
-process_started_after_boot_s=45
+uptime_s=$((marker + 50))
+process_started_after_boot_s=$process
 unlocked=true
 mode=auto
 service=running
@@ -107,14 +128,19 @@ journal_events=44
 -- journal (oldest first) --
 2026-11-24T09:00:00Z 69990s info svc.start unlocked=true
 2026-11-24T09:00:01Z 69991s info svc.mode service created: auto-connect, suggestion default: active (status 0)
-$boot_ts 50s info boot.received android.intent.action.LOCKED_BOOT_COMPLETED after unlock
-$boot_ts 51s info boot.jobs periodic + immediate ensure scheduled
-$boot_ts 52s info svc.start unlocked=true
-$boot_ts 52s info svc.mode user unlocked: auto-connect, suggestion default: active (status 0)
-$boot_ts 52s info pin.state listening on 5555
-$boot_ts 53s info wifi.suggest.job monitor stopped; re-registered the saved suggestions: suggestion default: active (status 0)
-$boot_ts 53s info boot.received android.intent.action.BOOT_COMPLETED after unlock
+$(at "$marker") ${marker}s info boot.received android.intent.action.LOCKED_BOOT_COMPLETED $unlock
+$(at "$marker") ${marker}s info boot.jobs periodic + immediate ensure scheduled
+$(at $((marker + 3))) $((marker + 3))s info svc.start unlocked=true
+$(at $((marker + 3))) $((marker + 3))s info svc.mode user unlocked: auto-connect, suggestion default: active (status 0)
+$(at $((marker + 3))) $((marker + 3))s info pin.state listening on 5555
+$(at $((marker + 4))) $((marker + 4))s info wifi.suggest.job monitor stopped; re-registered the saved suggestions: suggestion default: active (status 0)
+$(at $((marker + 5))) $((marker + 5))s info boot.received android.intent.action.BOOT_COMPLETED after unlock
 EOF
+}
+
+# A clean boot: the receiver runs ~27 s after boot and before unlock, the
+# service starts ~30 s in.
+boot_fixture "$POST" 27 29 'before unlock'
 
 expect 0 "a normal post-reboot state passes" check "$POST"
 expect 1 "the same boot is rejected" check "$PRE"
@@ -153,9 +179,42 @@ expect 0 "the previous-install journal section is ignored" check "$TMP/previous"
 # A failure logged after the current boot marker still fails.
 {
     cat "$POST"
-    printf '%s\n' "$boot_ts 54s error wifi.suggest.decrypt_failed default WP22"
+    printf '%s\n' "$(at 54) 54s error wifi.suggest.decrypt_failed default WP22"
 } >"$TMP/boot-failure"
 expect 1 "a boot-critical failure after the marker fails" check "$TMP/boot-failure"
+
+# The 2026-11-24 shape: the app-targeted boot broadcasts were enqueued only
+# when the app was opened, 238 s after boot (DokeOS autostart). Every older
+# check passed; the start latency is the only evidence.
+boot_fixture "$TMP/late-start" 238 238 'after unlock'
+expect 1 "a boot marker 238s late fails" check "$TMP/late-start"
+contains '238s' "the late start names the measured delay"
+contains 'launched by hand' "the late start says it looks manual"
+contains 'Auto Start Management' "the late start names the DokeOS gate"
+contains 'Doze/battery' "the late start names the Doze gate"
+
+# A phone that stays locked delays the marker legitimately: warning, not a
+# failure, while the process still starts inside the bound.
+boot_fixture "$TMP/locked" 60 60 'after unlock'
+expect 0 "a legitimately locked boot does not fail on lock alone" check "$TMP/locked"
+contains 'warn' "the locked boot is reported as a warning"
+contains "after unlock" "the locked boot names the unlock state"
+
+# The bound is overridable; with a 300 s limit the same boot only warns.
+expect 0 "the start-delay bound is overridable" \
+    check "$TMP/late-start" "$STATE" --max-start-delay 300
+
+# A non-numeric bound is documented as a usage error, so it is checked here.
+expect 2 "a non-numeric start-delay bound is a usage error" \
+    check "$TMP/late-start" "$STATE" --max-start-delay abc
+
+# A process that restarted long after an on-time marker is not a blocked boot:
+# the journal already proves the broadcast arrived at boot, so the gate is fine.
+boot_fixture "$TMP/restarted" 27 240 'before unlock'
+expect 0 "a restarted process after an on-time marker passes" \
+    check "$TMP/restarted" "$STATE"
+contains 'restarted after boot' "the restart is reported as the reason"
+contains 'Not an autostart-gate failure' "the restart does not blame the boot gate"
 
 expect 0 "a passing verdict is machine-readable" check "$POST" "$STATE" --json
 python3 - "$TMP/out" <<'PY'
@@ -165,8 +224,26 @@ with open(sys.argv[1]) as f:
     data = json.load(f)
 assert data["schema"] == 1
 assert data["ok"] is True
+assert data["verdict"] == "pass"
 assert data["boot_id_before"] == "100"
 assert data["boot_id_after"] == "101"
+assert data["max_start_delay_s"] == 90
+assert data["start_delay_s"] == 29
+assert data["boot_marker_delay_s"] == 27
+assert isinstance(data["boot_epoch"], int)
+PY
+
+expect 1 "the late start is machine-readable" \
+    check "$TMP/late-start" "$STATE" --json
+python3 - "$TMP/out" <<'PY'
+import json
+import sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+assert data["ok"] is False
+assert data["verdict"] == "fail"
+assert data["start_delay_s"] == 238
+assert data["boot_marker_delay_s"] == 238
 PY
 
 if [ "$failed" -ne 0 ]; then

@@ -21,6 +21,8 @@ STATE=${REBOOT_VERDICT_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/wireless-adb
 TMP=$(mktemp -d) || exit 1
 trap 'rm -rf "$TMP"' EXIT
 
+MAX_START_DELAY=90
+
 usage() {
     cat <<'USAGE'
 Record and check a phone reboot with the app's boot-surviving diagnostics.
@@ -29,8 +31,13 @@ Record and check a phone reboot with the app's boot-surviving diagnostics.
       Record boot_id, mode, service, Wi-Fi/pin state and the journal size.
 
   tools/reboot-verdict.sh check [--state FILE] [--json] [--quiet]
+                                [--max-start-delay SECONDS]
       After the reboot, compare the diagnostics with the record and print a
       pass/fail verdict. --json prints one object for CI.
+
+      --max-start-delay  how many seconds after boot the process and the first
+                         boot marker may arrive (default: 90). A later start
+                         means the app was not started by the boot broadcast.
 
 Environment:
   REBOOT_VERDICT_STATE  state file (default: ~/.local/state/wireless-adb-keeper/reboot-verdict.state)
@@ -45,6 +52,30 @@ USAGE
 blocked() {
     printf 'reboot-verdict: %s\n' "$1" >&2
     exit 3
+}
+
+is_seconds() {
+    # is_seconds <value>
+    case "$1" in
+        ''|*[!0-9]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+iso_epoch() {
+    # iso_epoch <2026-11-24T13:22:16Z>
+    date -u -d "$1" +%s 2>/dev/null || true
+}
+
+marker_delay_of() {
+    # marker_delay_of <post-boot journal lines>: the first boot.received ran
+    # this many seconds after boot, or nothing when there is no usable marker.
+    local line up
+    line=$(printf '%s\n' "$1" | grep ' boot\.received ' | head -n 1 || true)
+    [ -n "$line" ] || return 0
+    up=$(printf '%s\n' "$line" | awk '{print $2}')
+    up=${up%s}
+    is_seconds "$up" && printf '%s' "$up"
 }
 
 snapshot_value() {
@@ -92,6 +123,11 @@ state_value() {
 
 json_escape() {
     printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g'
+}
+
+json_number() {
+    # json_number <value>: an integer, or null when unknown.
+    if is_seconds "$1"; then printf '%s' "$1"; else printf 'null'; fi
 }
 
 json_array() {
@@ -164,6 +200,9 @@ check() {
     local tmp err before_boot after_boot before_up after_up checks=0 failures=0 warnings=0
     local mode after_mode service unlocked wifi_mode pass missing unreadable
     local before_held after_held port after_boot_lines mode_line new_boot=0
+    local start_delay marker_line marker_ts marker_up marker_epoch marker_delay boot_epoch
+    local marker_ahead
+    local max_start_delay=$MAX_START_DELAY verdict=pass
     local -a failure_list=() warning_list=()
 
     tmp="$TMP/diag"
@@ -224,6 +263,31 @@ check() {
         bad "credential storage is unlocked" "unlocked=$unlocked; unlock the phone and re-run"
     fi
 
+    # The service can still be running because the user opened the app, so
+    # boot_id, service and journal content cannot tell a boot start from a
+    # manual one. The process start delay is the missing fact.
+    start_delay=$(snapshot_value "$tmp" process_started_after_boot_s)
+    # A late process is only evidence of a blocked boot when the journal does
+    # not already show the broadcast arriving at boot: after an on-time marker
+    # the app did start at boot, and a late process is a later restart (a
+    # force-stop, a crash, a reinstall or Doze), not a refused boot gate.
+    marker_ahead=$(marker_delay_of \
+        "$(boot_section "$tmp" "$(state_value recorded_at)" 2>/dev/null || true)")
+    if [ "$new_boot" != 1 ]; then
+        warn "the process started near boot" "skipped: no new boot"
+    elif ! is_seconds "$start_delay"; then
+        warn "the process start delay is available" \
+            "process_started_after_boot_s='$start_delay'"
+    elif [ "$start_delay" -le "$max_start_delay" ]; then
+        ok "the process started ${start_delay}s after boot (limit ${max_start_delay}s)"
+    elif [ -n "$marker_ahead" ] && [ "$marker_ahead" -le "$max_start_delay" ]; then
+        warn "the process was restarted after boot" \
+            "the first boot marker arrived ${marker_ahead}s after boot, so the boot broadcast did start the app; the process now running started ${start_delay}s after boot (a force-stop, a crash, a reinstall or Doze). Not an autostart-gate failure."
+    else
+        bad "the process started near boot" \
+            "process_started_after_boot_s=${start_delay}s is over the ${max_start_delay}s limit (unlocked=$unlocked). The system boot broadcast starts the app; a start this late was probably the user opening it. Allow the app in DokeOS Auto Start Management and exempt it from Doze/battery optimization."
+    fi
+
     mode=$(state_value mode)
     after_mode=$(snapshot_value "$tmp" mode)
     if [ -n "$after_mode" ] && { [ -z "$mode" ] || [ "$after_mode" = "$mode" ]; }; then
@@ -277,6 +341,57 @@ check() {
     fi
 
     if [ "$new_boot" = 1 ] && [ -n "$after_boot_lines" ]; then
+        marker_line=$(printf '%s\n' "$after_boot_lines" |
+            grep ' boot\.received ' | head -n 1 || true)
+        marker_delay=
+        boot_epoch=
+        if [ -z "$marker_line" ]; then
+            warn "the first boot marker is near the boot instant" "no boot.received line"
+        else
+            marker_ts=$(printf '%s\n' "$marker_line" | awk '{print $1}')
+            marker_up=$(printf '%s\n' "$marker_line" | awk '{print $2}')
+            marker_up=${marker_up%s}
+            marker_epoch=$(iso_epoch "$marker_ts")
+            if ! is_seconds "$marker_up" || [ -z "$marker_epoch" ]; then
+                warn "the first boot marker is near the boot instant" \
+                    "cannot read the timestamp/uptime from: $marker_line"
+            else
+                # The marker's own wall clock minus its uptime is the boot
+                # instant; the distance from it is how late the marker ran.
+                boot_epoch=$((marker_epoch - marker_up))
+                marker_delay=$marker_up
+                if [ "$marker_delay" -le "$max_start_delay" ]; then
+                    ok "the first boot marker is ${marker_delay}s after boot (limit ${max_start_delay}s)"
+                else
+                    bad "the first boot marker is near the boot instant" \
+                        "it arrived ${marker_delay}s after boot (limit ${max_start_delay}s; boot at $(date -u -d "@$boot_epoch" +%Y-%m-%dT%H:%M:%SZ)). A boot marker this late looks like the app was launched by hand, not started by the boot broadcast."
+                fi
+            fi
+        fi
+
+        # LOCKED_BOOT_COMPLETED normally arrives before the first unlock. A
+        # phone that stays locked past the broadcast delays the marker, and
+        # that alone must not fail the boot; a late marker plus a late process
+        # is the manual-launch shape.
+        case "$marker_line" in
+            *'LOCKED_BOOT_COMPLETED before unlock'*)
+                ok "the boot marker arrived before unlock"
+                ;;
+            *'after unlock'*)
+                if is_seconds "$start_delay" && [ "$start_delay" -gt "$max_start_delay" ]; then
+                    bad "the boot marker arrived before unlock" \
+                        "the first boot marker is 'after unlock' and the process started ${start_delay}s after boot. The marker waited for the unlock, so the app was started by the unlock/launch, not by the boot broadcast."
+                else
+                    warn "the boot marker arrived after unlock" \
+                        "the first boot marker is 'after unlock'; the phone stayed locked past the broadcast. Not a failure by itself."
+                fi
+                ;;
+            *LOCKED_BOOT_COMPLETED*)
+                warn "the boot marker unlock state" \
+                    "boot.received has no before/after unlock detail: $marker_line"
+                ;;
+        esac
+
         if printf '%s\n' "$after_boot_lines" | grep -q ' svc\.start '; then
             ok "the boot path journaled svc.start"
         else
@@ -324,10 +439,16 @@ check() {
     fi
 
     if [ "$json" = 1 ]; then
-        printf '{"schema":1,"ok":%s,"boot_id_before":"%s","boot_id_after":"%s","checks":%d,"failed":%d,"warnings":%d,"failures":%s,"warning_messages":%s}\n' \
+        [ "$failures" -eq 0 ] || verdict=fail
+        printf '{"schema":1,"ok":%s,"verdict":"%s","boot_id_before":"%s","boot_id_after":"%s","checks":%d,"failed":%d,"warnings":%d,"max_start_delay_s":%s,"start_delay_s":%s,"boot_marker_delay_s":%s,"boot_epoch":%s,"failures":%s,"warning_messages":%s}\n' \
             "$([ "$failures" -eq 0 ] && echo true || echo false)" \
+            "$verdict" \
             "$(json_escape "$before_boot")" "$(json_escape "$after_boot")" \
             "$checks" "$failures" "$warnings" \
+            "$(json_number "$max_start_delay")" \
+            "$(json_number "$start_delay")" \
+            "$(json_number "$marker_delay")" \
+            "$(json_number "$boot_epoch")" \
             "$(json_array "${failure_list[@]}")" \
             "$(json_array "${warning_list[@]}")"
     else
@@ -364,10 +485,24 @@ while [ "$#" -gt 0 ]; do
             ;;
         --json) json=1; shift ;;
         --quiet) quiet=1; shift ;;
+        --max-start-delay)
+            [ "$#" -ge 2 ] && [ -n "$2" ] || { usage 2; }
+            MAX_START_DELAY=$2
+            shift 2
+            ;;
+        --max-start-delay=*)
+            MAX_START_DELAY=${1#*=}
+            shift
+            ;;
         -h|--help|help) usage 0 ;;
         *) printf 'unknown option: %s\n' "$1" >&2; usage 2 ;;
     esac
 done
+
+if ! is_seconds "$MAX_START_DELAY"; then
+    printf 'invalid --max-start-delay: %s\n' "$MAX_START_DELAY" >&2
+    usage 2
+fi
 
 case "$command" in
     record) record ;;
