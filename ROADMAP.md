@@ -187,6 +187,12 @@ documented: keep Termux, close the issue as "not feasible unrooted".
 
 ### M3 — TLS transport, discovery, and `tcpip` from the app · [#5](https://github.com/MBanucu/wireless-adb-keeper/issues/5)
 
+**Status (2026-11-25):** the in-app pin is implemented. With the app key paired
+and wireless debugging on, `PinnedPort` logged `pin.tls_ok` 5 s after Wi-Fi came
+up and 5555 was listening 7 s after `sys.boot_completed`, while the user was
+still `RUNNING_LOCKED`. mDNS is tried first, then local listening ports in the
+ephemeral range. Termux remains the fallback; `WifiRadio` still uses Termux.
+
 With a trusted key, the app can now do what the scripts did:
 
 - TLS client to adbd's wireless-debugging port (`CNXN`, `STLS`, adbd's client cert).

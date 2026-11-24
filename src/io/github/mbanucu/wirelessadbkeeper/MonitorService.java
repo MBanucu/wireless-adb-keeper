@@ -52,6 +52,10 @@ public class MonitorService extends Service {
     private Runnable pinRecheck;
     /** Whether the one-shot recheck is already queued; keeps ticks from stacking it. */
     private volatile boolean pinRecheckPending;
+    /** The boot/Wi-Fi/unlock gate in front of the pin loop. */
+    private PinGate pinGate;
+    /** Keeps the waiting-for-Wi-Fi line out of every 10 s tick. */
+    private volatile boolean pinWifiWaitLogged;
     private ExecutorService pinExecutor;
     private SharedPreferences prefs;
     private SharedPreferences.OnSharedPreferenceChangeListener prefsListener;
@@ -76,6 +80,11 @@ public class MonitorService extends Service {
         // First, so the journal reads start -> mode -> ensure in that order.
         Diag.info(this, "svc.start", "unlocked=" + userUnlocked());
         handler = new Handler(Looper.getMainLooper());
+        // A start before the first unlock is the LOCKED_BOOT_COMPLETED path: it
+        // waits for ConnectivityManager to report a Wi-Fi network before the
+        // first pin attempt, because the association is not guaranteed at the
+        // broadcast (ensure.no_wifi at 27 s, associated at ~28 s in #100).
+        pinGate = PinGate.atServiceStart(userUnlocked());
         createChannel();
         // From targetSdk 34 the type has to be passed here as well as declared
         // in the manifest, or the start is refused outright.
@@ -110,6 +119,9 @@ public class MonitorService extends Service {
                 checkPin(true);
             }
         };
+        if (pinGate.waitsForWifi()) {
+            journalPinWifiWait();
+        }
         startPinLoop(8000);
         Log.i(Ensurer.TAG, "MonitorService started"
                 + (userUnlocked() ? "" : " (before unlock)"));
@@ -134,6 +146,15 @@ public class MonitorService extends Service {
                 unlockRetries = 0;
                 runBoot(BootFlow.Event.USER_UNLOCKED);
                 scheduleEnsure("user unlocked", 0);
+                // The fallback for an unpaired install: Termux may run now, so
+                // do not spend up to 10 s reporting the port as blocked.
+                // PinnedPort.force bypasses its 30 s ask window too. If the
+                // boot is still waiting for Wi-Fi, the gate holds this attempt
+                // until the network callback reports one.
+                if (pinGate != null) {
+                    pinGate.onUserUnlocked();
+                    checkPin(true, true);
+                }
             }
         };
         IntentFilter filter = new IntentFilter(Intent.ACTION_USER_UNLOCKED);
@@ -378,10 +399,12 @@ public class MonitorService extends Service {
             public void onAvailable(Network network) {
                 Diag.verbose(MonitorService.this, VerboseLog.NETWORK,
                         "wifi available: network=" + network);
+                if (pinGate != null) pinGate.onWifiAvailable();
                 scheduleEnsure("wifi available", 500);
                 // A new network is when adbd comes back with a fresh random
                 // port, and when wireless debugging has to be switched on
-                // again before anything can be pinned.
+                // again before anything can be pinned. A locked boot had no
+                // pin attempt before this point.
                 startPinLoop(15000);
                 if (localWifi != null) localWifi.onWifiAvailable();
             }
@@ -450,6 +473,10 @@ public class MonitorService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
         boolean unlocked = userUnlocked();
+        // BOOT_COMPLETED starts the service again after unlock; if the
+        // ACTION_USER_UNLOCKED receiver was missed, do not leave the gate
+        // reporting a locked user for the rest of this service's life.
+        if (unlocked && pinGate != null) pinGate.onUserUnlocked();
         if (ACTION_RELOAD_LOCAL.equals(action) && unlocked) {
             runBoot(BootFlow.Event.SETTINGS_CHANGED);
         } else if (ACTION_CONNECT_LOCAL.equals(action) && unlocked) {
@@ -509,6 +536,14 @@ public class MonitorService extends Service {
 
     /** Probes the fixed port on the single pin worker, never on the main thread. */
     private void checkPin(final boolean recheck) {
+        checkPin(recheck, false);
+    }
+
+    /**
+     * As {@link #checkPin(boolean)}, optionally bypassing PinnedPort's 30 s ask
+     * window. The unlock uses {@code force} so it does not wait for the tick.
+     */
+    private void checkPin(final boolean recheck, final boolean force) {
         final ExecutorService executor = pinExecutor;
         if (executor == null) return;
         try {
@@ -516,7 +551,12 @@ public class MonitorService extends Service {
                 @Override
                 public void run() {
                     if (!running) return;
-                    String state = PinnedPort.check(MonitorService.this);
+                    if (pinGate != null && !pinGate.allowsAttempt()) {
+                        journalPinWifiWait();
+                        return;
+                    }
+                    String state = force ? PinnedPort.force(MonitorService.this)
+                            : PinnedPort.check(MonitorService.this);
                     // onDestroy may have run while the probe was in flight.
                     if (!running) return;
                     Log.i(Ensurer.TAG, "pin check: " + state);
@@ -533,6 +573,13 @@ public class MonitorService extends Service {
         } catch (RejectedExecutionException ignored) {
             // onDestroy shut the worker down.
         }
+    }
+
+    /** Journals the pre-unlock Wi-Fi wait once; the 10 s tick repeats it otherwise. */
+    private void journalPinWifiWait() {
+        if (pinWifiWaitLogged || pinGate == null) return;
+        pinWifiWaitLogged = true;
+        Diag.info(this, PinGate.WAIT_FOR_WIFI, pinGate.detail());
     }
 
     @Override

@@ -19,9 +19,9 @@ Neither half can be solved by the app alone:
 | --- | --- | --- |
 | Re-enable wireless debugging | the app (`WRITE_SECURE_SETTINGS`) | Termux cannot write secure settings |
 | Reconnect to Wi-Fi silently | the app (`WifiNetworkSuggestion`) | — |
-| Run `adb connect` | Termux | apps cannot run the adb client |
-| Learn adbd's port | Termux via `adb-connect` (mDNS) | apps cannot read `/proc/net/tcp`, and adbd's port is not exposed in any property |
-| Pin adbd to port 5555 | Termux (the app asks it to) | `tcpip` is an adb *service request*: it needs an adb client holding a paired key, and the property it sets (`service.adb.tcp.port`) is refused to `setprop` from the shell user |
+| Run `adb connect` | Termux, or the app's own client for the pin | the bootstrap APK has no adb client |
+| Learn adbd's port | app: `NsdManager` mDNS, then local listening ports; Termux fallback | adbd's port is not exposed in any property |
+| Pin adbd to port 5555 | app: `tcpip:5555` over its own trusted TLS key; Termux fallback | only a client whose key adbd already accepts can send the service request |
 
 ## Components
 
@@ -782,14 +782,19 @@ that one entry and a line in `logcat`, never the service.
 rediscover adbd's port after every restart. The port is set with `adb tcpip 5555`, which
 is an adb *service request*: it needs an adb client whose key adbd already accepts.
 
-The app cannot be that client — neither the client nor the key is available to it — so
-it uses the one the phone already has: **Termux's adb**, which is paired with adbd. When
-`127.0.0.1:5555` stops accepting connections, `PinnedPort` sends a `RUN_COMMAND` intent
-to Termux, Termux runs `pin-adb-port.sh`, and the script attaches to adbd (the serial the
-keepalive already holds, then mDNS, then the phone's TCP table or a scan) and sends
-`tcpip:5555`.
+The canonical Gradle build is that client now. Its key and certificate live in
+device-protected storage, so `PinnedPort` can open adbd's TLS port and send
+`tcpip:5555` even before the first unlock. It discovers the TLS port with
+`NsdManager` (`_adb-tls-connect._tcp`) and falls back to listening local ports in
+the ephemeral range; a stale advertisement fails the TLS handshake and the next
+candidate is tried.
 
-Requirements:
+Termux remains the fallback for an install whose app key is not paired and for
+the dependency-free `build.sh` APK. When `127.0.0.1:5555` stops accepting
+connections, `PinnedPort` sends a `RUN_COMMAND` intent to Termux, which runs
+`pin-adb-port.sh` and sends `tcpip:5555` with its own paired client.
+
+Fallback requirements:
 
 - Termux from F-Droid/GitHub with `allow-external-apps=true` and a working `adb`.
 - This checkout **at `~/wireless-adb-keeper`** in Termux — that is the path the app
