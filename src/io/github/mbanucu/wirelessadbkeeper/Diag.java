@@ -267,7 +267,7 @@ public final class Diag {
         int missing = 0;
         int unreadable = 0;
         for (Profile profile : profiles) {
-            switch (Profiles.passwordState(c, profile.id())) {
+            switch (NetworkRows.passwordState(Profiles.secret(c, profile.id()))) {
                 case SAVED:
                     saved++;
                     break;

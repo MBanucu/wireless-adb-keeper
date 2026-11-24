@@ -87,11 +87,6 @@ public final class Profiles {
         return value != null && !value.isEmpty();
     }
 
-    /** Whether this profile's password is saved, absent or unreadable. */
-    public static synchronized NetworkRows.PasswordState passwordState(Context c, String id) {
-        return NetworkRows.passwordState(secret(c, id));
-    }
-
     private static ProfileTable table(final Context c) {
         final SharedPreferences prefs = c.getSharedPreferences(
                 LocalWifi.PREFS, Context.MODE_PRIVATE);

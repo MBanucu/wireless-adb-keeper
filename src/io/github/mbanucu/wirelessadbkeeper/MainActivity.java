@@ -372,7 +372,8 @@ public class MainActivity extends Activity {
         Map<String, NetworkRows.PasswordState> passwordStates = new LinkedHashMap<>();
         boolean unreadable = false;
         for (Profile profile : profiles) {
-            NetworkRows.PasswordState state = Profiles.passwordState(this, profile.id());
+            NetworkRows.PasswordState state =
+                    NetworkRows.passwordState(Profiles.secret(this, profile.id()));
             passwordStates.put(profile.id(), state);
             if (state == NetworkRows.PasswordState.UNREADABLE) unreadable = true;
         }
@@ -522,7 +523,7 @@ public class MainActivity extends Activity {
     private View networkEditor(final Profile profile) {
         NetworkRows.PasswordState saved = profile == null
                 ? NetworkRows.PasswordState.MISSING
-                : Profiles.passwordState(this, profile.id());
+                : NetworkRows.passwordState(Profiles.secret(this, profile.id()));
         boolean hasStoredPassword = saved != NetworkRows.PasswordState.MISSING;
         boolean unreadable = saved == NetworkRows.PasswordState.UNREADABLE;
 
