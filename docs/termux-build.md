@@ -182,10 +182,17 @@ Some entries are host-specific and are added by hand:
 - The `aapt2` platform jars: Termux uses the override, so it never resolves
   them. CI's Ubuntu runner resolves `-linux.jar`; macOS and Windows resolve
   their own. The published hashes are listed for all of them.
-- A few BOM `.module` files (`guava-parent`, `junit-bom`,
-  `bc-jdk18on-bom`) that the Ubuntu runner resolved and the Termux cache did
-  not. They were added from Maven Central's published files after the first CI
-  run reported them.
+- The rest of the file was regenerated with an empty `GRADLE_USER_HOME` so it
+  covers what a clean CI runner downloads. Generating over the phone's warm
+  cache missed metadata-only files (BOM POMs/modules, Kotlin build tools, test
+  infrastructure) that a fresh runner still verifies. When regenerating, use a
+  fresh cache:
+
+  ```bash
+  GRADLE_USER_HOME=$(mktemp -d) gradle --write-verification-metadata sha256 \
+      check assembleDebug \
+      -Pandroid.aapt2FromMavenOverride="$PREFIX/bin/aapt2"
+  ```
 
 If a new host resolves an artifact that is not listed, Gradle fails closed.
 Add its published SHA-256 (or, for a project mirror, the exact bytes you
