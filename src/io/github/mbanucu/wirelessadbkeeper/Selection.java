@@ -31,29 +31,31 @@ public final class Selection {
     public static final class Choice {
         private final Profile profile;
         private final Profile link;
+        private final boolean kept;
         private final List<Profile> tried;
         private final List<Profile> attempted;
 
-        private Choice(Profile profile, Profile link, List<Profile> tried,
+        private Choice(Profile profile, Profile link, boolean kept, List<Profile> tried,
                        List<Profile> attempted) {
             this.profile = profile;
             this.link = link;
+            this.kept = kept;
             this.tried = Collections.unmodifiableList(new ArrayList<>(tried));
             this.attempted = Collections.unmodifiableList(new ArrayList<>(attempted));
         }
 
         static Choice chosen(Profile profile, List<Profile> tried,
                              List<Profile> attempted) {
-            return new Choice(profile, null, tried, attempted);
+            return new Choice(profile, null, false, tried, attempted);
         }
 
         static Choice kept(Profile link, List<Profile> tried,
                            List<Profile> attempted) {
-            return new Choice(null, link, tried, attempted);
+            return new Choice(null, link, true, tried, attempted);
         }
 
         static Choice none(List<Profile> tried, List<Profile> attempted) {
-            return new Choice(null, null, tried, attempted);
+            return new Choice(null, null, false, tried, attempted);
         }
 
         /** The profile to request, or null when the link is kept or none is present. */
@@ -70,14 +72,18 @@ public final class Selection {
             return profile != null;
         }
 
-        /** True when nothing in the scan matched but a link was already up. */
+        /**
+         * True when nothing in the scan matched but a link was already up.
+         * The link may not correspond to a saved profile, so {@link #link()}
+         * can be null even though the link itself is being kept.
+         */
         public boolean kept() {
-            return profile == null && link != null;
+            return kept;
         }
 
         /** True when there is no profile to request and no link to keep. */
         public boolean noCandidate() {
-            return profile == null && link == null;
+            return profile == null && !kept;
         }
 
         /** Every profile that was checked against the scan, in priority order. */

@@ -22,6 +22,7 @@ public final class SelectionTest {
         highestPriorityPresentProfileWins();
         onlyTheLowerPrioritySsidPresentWins();
         nothingPresentKeepsTheCurrentLink();
+        anUnsavedCurrentLinkIsAlsoKept();
         nothingPresentAndNoLinkIsANoCandidate();
         aFailedProfileAdvancesToTheNextPresentOne();
         oneCycleTriesAtMostThreeProfiles();
@@ -58,6 +59,16 @@ public final class SelectionTest {
         check("a kept link is not a no-candidate", false, choice.noCandidate());
         check("the status names the kept profile", "Lab (p1)",
                 Selection.label(choice.link()));
+    }
+
+    private static void anUnsavedCurrentLinkIsAlsoKept() {
+        Selection.Choice choice = Selection.choose(three(), scan(), "Guest");
+
+        check("an unsaved current link is still kept", true, choice.kept());
+        check("an unsaved current link has no saved profile", null, choice.link());
+        check("an unsaved current link is not a no-candidate", false,
+                choice.noCandidate());
+        check("no profile is chosen for an unsaved link", false, choice.chosen());
     }
 
     private static void nothingPresentAndNoLinkIsANoCandidate() {
