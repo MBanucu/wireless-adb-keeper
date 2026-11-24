@@ -12,11 +12,13 @@ fi
 # shellcheck disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-count_starts() {
-    journal | grep -c ' svc\.start' || true
+# The journal is a 200-line ring: a new svc.start can evict an old one, so a
+# count can stay flat (or fall) across a recovery. Compare the newest marker.
+last_start() {
+    journal | grep ' svc\.start' | tail -n 1 || true
 }
 
-starts_before=$(count_starts)
+starts_before=$(last_start)
 force_stop_app
 assert_contains "force-stop stops the monitor" 'service=stopped' \
     "$(keeper status)"
@@ -43,9 +45,10 @@ done
 assert_eq "the monitor service is running after force-stop" 1 "$running"
 assert_eq "5555 listens within 30s after force-stop" 1 "$listening"
 
-starts_after=$(count_starts)
+starts_after=$(last_start)
 assert_eq "the journal has a new svc.start" 1 \
-    "$([ "$starts_after" -gt "$starts_before" ] && echo 1 || echo 0)"
+    "$([ -n "$starts_after" ] && [ "$starts_after" != "$starts_before" ] \
+        && echo 1 || echo 0)"
 
 if [ "${DEVICE_ALLOW_REBOOT:-0}" != 1 ]; then
     skip "reboot recovery (#39)" "pass --allow-reboot to opt in"
@@ -76,7 +79,7 @@ wait_after_reboot() {
     return 1
 }
 
-starts_before=$(count_starts)
+starts_before=$(last_start)
 dev_adb reboot
 assert_eq "the device came back after reboot" 1 \
     "$(wait_after_reboot && echo 1 || echo 0)"
@@ -99,6 +102,7 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
 done
 assert_eq "the monitor service starts after reboot" 1 "$running"
 assert_eq "5555 listens within 120s after reboot" 1 "$listening"
-starts_after=$(count_starts)
+starts_after=$(last_start)
 assert_eq "the boot path journals a new svc.start" 1 \
-    "$([ "$starts_after" -gt "$starts_before" ] && echo 1 || echo 0)"
+    "$([ -n "$starts_after" ] && [ "$starts_after" != "$starts_before" ] \
+        && echo 1 || echo 0)"
