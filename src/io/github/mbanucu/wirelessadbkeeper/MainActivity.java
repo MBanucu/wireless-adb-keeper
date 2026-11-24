@@ -1,10 +1,12 @@
 package io.github.mbanucu.wirelessadbkeeper;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.job.JobInfo;
 import android.app.job.JobScheduler;
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
@@ -35,6 +37,11 @@ import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
 public class MainActivity extends Activity {
     // A small fixed palette so the screen reads the same on every device theme.
     private static final int ACCENT = 0xFF3B5BDB;
@@ -46,6 +53,8 @@ public class MainActivity extends Activity {
     private static final int HAIRLINE = 0xFFD1D5DB;
 
     private static final String[] PAGE_TITLES = {"Status", "Connect", "Network", "Diag", "Help"};
+    /** Index of the profile list; it re-reads the store whenever it is shown. */
+    private static final int PAGE_NETWORK = 2;
     /** Index of the diagnostics page; the Help page keeps the last slot. */
     private static final int PAGE_DIAG = 3;
     private static final String STATE_PAGE = "page";
@@ -58,14 +67,19 @@ public class MainActivity extends Activity {
     private CompoundButton.OnCheckedChangeListener verboseListener;
     private Button serviceButton;
     private Button localButton;
-    private EditText ssidField;
-    private EditText passField;
+    private TextView networkSummary;
+    private LinearLayout networkRowsBox;
+    private LinearLayout networkAddBox;
+    private Button networkAddButton;
+    /** The expanded row's id, or null; the whole list is rebuilt after a change. */
+    private String networkOpenId;
+    private boolean networkAdding;
     private View[] pages;
     private View[] navIndicators;
     private TextView[] navLabels;
     private int page = 0;
     private String lastStatusKey = "";
-    private final java.util.Set<String> openHints = new java.util.HashSet<>();
+    private final Set<String> openHints = new HashSet<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean reEnabling = false;
     private ContentObserver observer;
@@ -301,57 +315,308 @@ public class MainActivity extends Activity {
     private View pageNetwork() {
         LinearLayout root = column();
         pageHeader(root, "Network",
-                "The Wi-Fi network to rejoin, and the password it uses.");
+                "Saved Wi-Fi networks, in the order the phone tries them.");
 
-        root.addView(sectionLabel("Saved network"));
-        ssidField = field("SSID", InputType.TYPE_CLASS_TEXT);
-        ssidField.setText(LocalWifi.ssid(this));
-        ssidField.setLayoutParams(spaced(matchWrap(), 10));
-        root.addView(ssidField);
+        root.addView(sectionLabel("Saved networks"));
+        networkSummary = text("", 12, MUTED);
+        networkSummary.setLineSpacing(dp(2), 1f);
+        root.addView(networkSummary, matchWrap());
 
-        // Never write the saved passphrase back into the field: a screenshot or
-        // a glance is enough to leak it. The hint only says whether one exists.
-        passField = field(passphraseHint(),
-                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        passField.setLayoutParams(spaced(matchWrap(), 10));
-        root.addView(passField);
+        networkRowsBox = new LinearLayout(this);
+        networkRowsBox.setOrientation(LinearLayout.VERTICAL);
+        root.addView(networkRowsBox, spaced(matchWrap(), 6));
 
-        TextView passHint = text("Used in both modes. Auto-connect registers the network with "
-                + "the saved password; open networks need none.", 12, MUTED);
-        passHint.setLayoutParams(spaced(matchWrap(), 6));
-        passHint.setLineSpacing(dp(2), 1f);
-        root.addView(passHint);
-
-        action(root, "Save SSID and password",
-                "Stores the network name and any newly typed password for both modes. "
-                        + "Auto-connect registers a Wi-Fi suggestion with the saved values; "
-                        + "local-only mode uses them each time you approve a reconnect.",
-                false, new View.OnClickListener() {
+        networkAddButton = action(root, "Add network",
+                "Opens an empty editor. Adding a network never changes another saved one.",
+                true, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                String typed = passField.getText().toString();
-                // The field starts empty, so an empty field means "keep the
-                // stored passphrase"; only a newly typed value replaces it.
-                ProfileTable.Outcome saved = Profiles.save(MainActivity.this,
-                        ssidField.getText().toString(), null,
-                        typed.isEmpty() ? null : typed);
-                if (!saved.ok()) {
-                    DiagReasons.Failure failure = DiagReasons.profileFailure(saved.error());
-                    Diag.event(MainActivity.this, failure.level(), failure.code(),
-                            "profile save refused: "
-                                    + DiagReasons.profileDetail(saved.error()));
-                    toast("Could not save: " + saved.error());
-                    return;
-                }
-                sendServiceAction(MonitorService.ACTION_RELOAD_LOCAL);
-                ssidField.setText(saved.profile().ssid());
-                passField.setText("");
-                passField.setHint(passphraseHint());
-                toast("Saved: " + saved.profile().ssid());
-                refreshStatus();
+                networkAdding = !networkAdding;
+                networkOpenId = null;
+                refreshNetwork();
             }
         });
+
+        networkAddBox = new LinearLayout(this);
+        networkAddBox.setOrientation(LinearLayout.VERTICAL);
+        root.addView(networkAddBox, matchWrap());
+
+        TextView note = text("Empty password keeps the saved one. Tap a network to edit it;"
+                + " use Clear saved password to remove a secret.", 12, MUTED);
+        note.setLineSpacing(dp(2), 1f);
+        note.setLayoutParams(spaced(matchWrap(), 6));
+        root.addView(note);
+
+        refreshNetwork();
         return scrollOf(root);
+    }
+
+    /**
+     * Rebuilds the list from {@link Profiles}. Every change goes through
+     * {@link Keeper} and then here, so the rows cannot keep a value the store
+     * no longer has.
+     */
+    private void refreshNetwork() {
+        if (networkRowsBox == null) return;
+        networkRowsBox.removeAllViews();
+        if (networkAddBox != null) networkAddBox.removeAllViews();
+
+        List<Profile> profiles = Profiles.list(this);
+        Set<String> withSecret = new HashSet<>();
+        for (Profile profile : profiles) {
+            if (Profiles.hasSecret(this, profile.id())) withSecret.add(profile.id());
+        }
+        Map<String, String> statuses = NetworkRows.parseStatuses(LocalWifi.detail);
+        List<NetworkRows.Row> rows = NetworkRows.rows(profiles, withSecret, statuses);
+
+        if (networkSummary != null) {
+            String summary = NetworkRows.summary(rows);
+            networkSummary.setText(rows.isEmpty() ? summary + ". Add one below." : summary);
+        }
+        if (networkAddButton != null) {
+            networkAddButton.setText(networkAdding ? "Cancel add" : "Add network");
+        }
+
+        boolean openFound = false;
+        for (int i = 0; i < rows.size(); i++) {
+            NetworkRows.Row row = rows.get(i);
+            networkRowsBox.addView(networkRow(row, i, rows.size()),
+                    spaced(matchWrap(), 8));
+            if (row.id().equals(networkOpenId)) {
+                openFound = true;
+                Profile profile = findProfile(profiles, row.id());
+                if (profile != null) {
+                    networkRowsBox.addView(networkEditor(profile), spaced(matchWrap(), 8));
+                }
+            }
+        }
+        if (!openFound) networkOpenId = null;
+        if (networkAdding && networkAddBox != null) {
+            networkAddBox.addView(networkEditor(null), spaced(matchWrap(), 8));
+        }
+    }
+
+    private static Profile findProfile(List<Profile> profiles, String id) {
+        for (Profile profile : profiles) {
+            if (profile.id().equals(id)) return profile;
+        }
+        return null;
+    }
+
+    /** One tappable profile card: SSID, badge, password state, status and order. */
+    private View networkRow(final NetworkRows.Row row, final int index, final int count) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(rounded(CARD_BG, dp(12), 0, 0));
+        card.setPadding(dp(14), dp(10), dp(10), dp(10));
+        card.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                networkOpenId = row.id().equals(networkOpenId) ? null : row.id();
+                networkAdding = false;
+                refreshNetwork();
+            }
+        });
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+
+        LinearLayout labels = new LinearLayout(this);
+        labels.setOrientation(LinearLayout.VERTICAL);
+
+        TextView title = text(row.ssid(), 16, TEXT);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        labels.addView(title);
+
+        LinearLayout meta = new LinearLayout(this);
+        meta.setOrientation(LinearLayout.HORIZONTAL);
+        meta.setGravity(Gravity.CENTER_VERTICAL);
+        TextView badge = text(row.badge(), 11, ACCENT);
+        badge.setTypeface(Typeface.DEFAULT_BOLD);
+        badge.setBackground(rounded(0xFFE0E7FF, dp(4), 0, 0));
+        badge.setPadding(dp(6), dp(1), dp(6), dp(1));
+        meta.addView(badge);
+        TextView pass = text(row.passwordLabel(), 12, MUTED);
+        pass.setPadding(dp(8), 0, 0, 0);
+        meta.addView(pass);
+        labels.addView(meta, spaced(matchWrap(), 4));
+
+        labels.addView(text(row.statusLabel(), 12, MUTED), spaced(matchWrap(), 3));
+
+        String marker = row.marker();
+        if (!marker.isEmpty()) {
+            TextView active = text(marker, 10, ACCENT);
+            active.setTypeface(Typeface.DEFAULT_BOLD);
+            active.setLetterSpacing(0.06f);
+            labels.addView(active, spaced(matchWrap(), 4));
+        }
+        header.addView(labels, new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        header.addView(moveButton("\u2191", "Move " + row.ssid() + " up", index > 0,
+                new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                moveNetwork(row, index);
+            }
+        }));
+        header.addView(moveButton("\u2193", "Move " + row.ssid() + " down", index + 1 < count,
+                new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                moveNetwork(row, index + 2);
+            }
+        }));
+        card.addView(header, matchWrap());
+        return card;
+    }
+
+    private Button moveButton(String label, String description, boolean enabled,
+                              View.OnClickListener listener) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setTextSize(18);
+        button.setAllCaps(false);
+        button.setMinWidth(0);
+        button.setMinHeight(0);
+        button.setContentDescription(description);
+        button.setEnabled(enabled);
+        button.setAlpha(enabled ? 1f : 0.3f);
+        button.setBackgroundTintList(ColorStateList.valueOf(0xFFE5E7EB));
+        button.setOnClickListener(listener);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(42), dp(42));
+        lp.leftMargin = dp(6);
+        button.setLayoutParams(lp);
+        return button;
+    }
+
+    /** Moves one profile to a 1-based try position, through the CLI's own path. */
+    private void moveNetwork(NetworkRows.Row row, int priority) {
+        String result = Keeper.setPriority(this, row.id(), String.valueOf(priority));
+        if (showFailure(result)) return;
+        toast("Try order updated");
+        refreshNetwork();
+    }
+
+    /**
+     * The inline editor. The password field is always empty; only the hint says
+     * whether a secret is stored. Saving with it empty keeps that secret, and
+     * clearing it is the separate button that calls {@link Profiles#update}
+     * with an explicit empty value.
+     */
+    private View networkEditor(final Profile profile) {
+        final boolean saved = profile != null && Profiles.hasSecret(this, profile.id());
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(rounded(0xFFFFFFFF, dp(12), dp(1), HAIRLINE));
+        card.setPadding(dp(14), dp(12), dp(14), dp(12));
+
+        TextView label = text(profile == null ? "NEW NETWORK" : "EDIT NETWORK", 10, MUTED);
+        label.setTypeface(Typeface.DEFAULT_BOLD);
+        label.setLetterSpacing(0.08f);
+        card.addView(label);
+
+        final EditText ssid = field("SSID", InputType.TYPE_CLASS_TEXT);
+        if (profile != null) ssid.setText(profile.ssid());
+        card.addView(ssid, spaced(matchWrap(), 8));
+
+        final EditText pass = field(NetworkRows.passwordHint(saved),
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        card.addView(pass, spaced(matchWrap(), 8));
+
+        TextView hint = text("Empty leaves the saved password alone. It is never shown here.",
+                12, MUTED);
+        hint.setLineSpacing(dp(2), 1f);
+        card.addView(hint, spaced(matchWrap(), 4));
+
+        LinearLayout buttons = new LinearLayout(this);
+        buttons.setOrientation(LinearLayout.HORIZONTAL);
+
+        Button save = primary(profile == null ? "Add" : "Save",
+                new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                String name = ssid.getText().toString().trim();
+                String typed = pass.getText().toString();
+                // An empty field keeps the stored secret; only a typed value
+                // replaces it. Clearing is the button below, deliberately.
+                String secret = typed.isEmpty() ? null : typed;
+                String result = profile == null
+                        ? Keeper.saveNetwork(MainActivity.this, name, secret)
+                        : Keeper.saveProfile(MainActivity.this, profile.id(), name, secret);
+                if (showFailure(result)) return;
+                networkOpenId = null;
+                networkAdding = false;
+                toast("Saved: " + name);
+                refreshNetwork();
+            }
+        });
+        LinearLayout.LayoutParams saveLp = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        saveLp.topMargin = dp(8);
+        saveLp.rightMargin = dp(4);
+        save.setLayoutParams(saveLp);
+        buttons.addView(save);
+
+        if (profile != null) {
+            Button delete = button("Delete", new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    confirmDelete(profile);
+                }
+            });
+            LinearLayout.LayoutParams deleteLp = new LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+            deleteLp.topMargin = dp(8);
+            deleteLp.leftMargin = dp(4);
+            delete.setLayoutParams(deleteLp);
+            buttons.addView(delete);
+        }
+        card.addView(buttons, matchWrap());
+
+        if (saved && profile != null) {
+            card.addView(button("Clear saved password", new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    String result = Keeper.saveProfile(MainActivity.this, profile.id(),
+                            profile.ssid(), "");
+                    if (showFailure(result)) return;
+                    networkOpenId = profile.id();
+                    networkAdding = false;
+                    toast("Password cleared: " + profile.ssid());
+                    refreshNetwork();
+                }
+            }), matchWrap());
+        }
+        return card;
+    }
+
+    /** The confirmation names the SSID and says the password goes with it. */
+    private void confirmDelete(final Profile profile) {
+        new AlertDialog.Builder(this)
+                .setTitle("Delete network")
+                .setMessage(NetworkRows.deleteConfirmation(profile.ssid()))
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Delete", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        String result = Keeper.removeProfile(MainActivity.this, profile.id());
+                        if (showFailure(result)) return;
+                        networkOpenId = null;
+                        toast("Deleted: " + profile.ssid());
+                        refreshNetwork();
+                    }
+                })
+                .show();
+    }
+
+    /** True, with the sentence toasted, when a Keeper reply is an error. */
+    private boolean showFailure(String result) {
+        if (result == null || !result.startsWith("error=")) return false;
+        toast(result.substring("error=".length()));
+        return true;
     }
 
     private View pageDiagnostics() {
@@ -668,6 +933,9 @@ public class MainActivity extends Activity {
                 navLabels[i].setTypeface(active ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
             }
         }
+        if (index == PAGE_NETWORK) {
+            refreshNetwork();
+        }
         if (index == PAGE_DIAG) {
             refreshDiag();
         }
@@ -725,13 +993,6 @@ public class MainActivity extends Activity {
     private LinearLayout.LayoutParams spaced(LinearLayout.LayoutParams lp, int topDp) {
         lp.topMargin = dp(topDp);
         return lp;
-    }
-
-    /** Whether a passphrase is stored, without putting it back on screen. */
-    private String passphraseHint() {
-        String saved = LocalWifi.passphrase(this);
-        return saved == null || saved.isEmpty()
-                ? "Password" : "Saved - type a new password to replace";
     }
 
     private EditText field(String hint, int inputType) {
