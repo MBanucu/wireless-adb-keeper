@@ -158,6 +158,20 @@ public final class LocalWifi {
         return c.checkSelfPermission(PERM_LOCATION) == PackageManager.PERMISSION_GRANTED;
     }
 
+    /**
+     * True once credential-protected storage and the Keystore are readable.
+     *
+     * <p>The Wi-Fi prefs and the encrypted passphrase live there, so before the
+     * first unlock after a reboot they cannot be read at all. Callers that apply
+     * the saved mode must wait instead of treating the unreadable value as an
+     * empty password.
+     */
+    public static boolean storageUnlocked(Context c) {
+        android.os.UserManager um =
+                (android.os.UserManager) c.getSystemService(Context.USER_SERVICE);
+        return um == null || um.isUserUnlocked();
+    }
+
     public void setListener(Listener listener) {
         this.listener = listener;
     }

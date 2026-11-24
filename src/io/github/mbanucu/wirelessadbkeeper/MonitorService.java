@@ -57,8 +57,17 @@ public class MonitorService extends Service {
     private SharedPreferences.OnSharedPreferenceChangeListener prefsListener;
     private String pendingReason = "";
     private LocalWifi localWifi;
-    /** Whether the credential-protected Wi-Fi mode has been applied. */
-    private boolean applied;
+    /** The reboot/unlock decision, and whether the saved mode has been applied. */
+    private BootFlow.Session boot;
+    /** Last mode journal line, so a repeated start command does not repeat it. */
+    private String lastBootJournal = "";
+    /** A bounded retry when an unlock finds storage still locked. */
+    private int unlockRetries = 0;
+    private static final int UNLOCK_RETRY_MAX = 3;
+    private static final long UNLOCK_RETRY_MS = 3000L;
+    private Runnable unlockRetry;
+    /** One line for diagnostics: what the saved Wi-Fi mode is doing. */
+    private static volatile String lastModeSummary = "not applied";
 
     @Override
     public void onCreate() {
@@ -79,13 +88,19 @@ public class MonitorService extends Service {
         registerNetworkCallback();
         registerSettingObserver();
         registerUnlockReceiver();
+        boot = new BootFlow.Session(new BootFlow.Applier() {
+            @Override
+            public String apply(String reason) {
+                return applyMode(reason);
+            }
+        });
         // The pin loop and Ensurer read no credential-protected app storage, so
         // they can run at LOCKED_BOOT_COMPLETED. The mode comes from credential-
         // protected prefs and has to wait for the first unlock.
         if (userUnlocked()) {
             registerPrefsListener();
-            applyMode("service created");
         }
+        runBoot(BootFlow.Event.SERVICE_CREATED);
         scheduleEnsure("service created", 0);
         pinExecutor = Executors.newSingleThreadExecutor();
         pinRecheck = new Runnable() {
@@ -113,7 +128,11 @@ public class MonitorService extends Service {
                 Log.i(Ensurer.TAG, "user unlocked; applying saved Wi-Fi mode");
                 Diag.info(MonitorService.this, "svc.unlocked", "applying saved mode");
                 registerPrefsListener();
-                applyMode("user unlocked");
+                // This is the authoritative post-boot event: apply the mode even
+                // when an earlier start already claimed it, because the Keystore
+                // and the suggestions are only usable from here.
+                unlockRetries = 0;
+                runBoot(BootFlow.Event.USER_UNLOCKED);
                 scheduleEnsure("user unlocked", 0);
             }
         };
@@ -126,7 +145,60 @@ public class MonitorService extends Service {
             }
         } catch (Exception e) {
             Log.e(Ensurer.TAG, "could not register unlock receiver", e);
+            Diag.error(this, "svc.unlock_receiver", "could not register for unlock: " + e);
         }
+    }
+
+    /**
+     * Runs one boot-flow event and journals the stage when it is not a plain
+     * successful apply (that one journals itself in {@link #applyMode}).
+     *
+     * <p>An unlock that still cannot read credential storage is retried a few
+     * times rather than reported as success: it is the one state in which the
+     * suggestion is definitely not registered.
+     */
+    private void runBoot(BootFlow.Event event) {
+        if (boot == null) return;
+        BootFlow.Decision decision = boot.onEvent(event, userUnlocked());
+        lastModeSummary = boot.summary();
+        String code = decision.code();
+        if (!code.isEmpty()) {
+            String key = code + " " + decision.detail();
+            if (!key.equals(lastBootJournal)) {
+                lastBootJournal = key;
+                String level = decision.stage() == BootFlow.Stage.FAILED ? "warn" : "info";
+                Diag.event(this, level, code, decision.detail());
+            }
+        } else if (decision.applied()) {
+            lastBootJournal = "";
+            unlockRetries = 0;
+        }
+        Log.i(Ensurer.TAG, "boot flow (" + event.label() + "): " + decision.stage()
+                + (decision.detail().isEmpty() ? "" : ": " + decision.detail()));
+        if ((event == BootFlow.Event.USER_UNLOCKED || event == BootFlow.Event.RETRY)
+                && decision.retryable()) {
+            scheduleUnlockRetry();
+        }
+    }
+
+    /** Retries a post-unlock apply a few times, then leaves the reason in the journal. */
+    private void scheduleUnlockRetry() {
+        if (unlockRetries >= UNLOCK_RETRY_MAX) {
+            Diag.warn(this, "svc.mode.failed", "user unlocked, but the saved Wi-Fi mode"
+                    + " still could not be applied after " + UNLOCK_RETRY_MAX
+                    + " retries; save the Wi-Fi password again");
+            return;
+        }
+        unlockRetries++;
+        unlockRetry = new Runnable() {
+            @Override
+            public void run() {
+                unlockRetry = null;
+                if (!running) return;
+                runBoot(BootFlow.Event.RETRY);
+            }
+        };
+        handler.postDelayed(unlockRetry, UNLOCK_RETRY_MS);
     }
 
     /**
@@ -155,7 +227,7 @@ public class MonitorService extends Service {
                     public void run() {
                         if (!running || !userUnlocked()) return;
                         Log.i(Ensurer.TAG, "saved Wi-Fi settings changed; reloading");
-                        applyMode("settings saved");
+                        runBoot(BootFlow.Event.SETTINGS_CHANGED);
                     }
                 });
             }
@@ -163,19 +235,45 @@ public class MonitorService extends Service {
         prefs.registerOnSharedPreferenceChangeListener(prefsListener);
     }
 
-    private void applyMode(String reason) {
-        applied = true;
-        if (LocalWifi.isAutoMode(this)) {
+    /**
+     * Applies the saved Wi-Fi mode. Null means applied; otherwise the sentence
+     * says what still blocks it, so {@link BootFlow} can journal the stage and
+     * retry after an unlock instead of pretending the pass succeeded.
+     */
+    private String applyMode(String reason) {
+        boolean auto;
+        try {
+            auto = LocalWifi.isAutoMode(this);
+        } catch (Exception e) {
+            Log.w(Ensurer.TAG, "mode (" + reason + "): saved mode is not readable yet: " + e);
+            return reason + ": the saved mode is not readable yet (" + e + ")";
+        }
+        if (auto) {
             if (localWifi != null) {
                 localWifi.stop();
                 localWifi = null;
             }
-            SuggestionRegistry.Outcome outcome = WifiSuggestion.addAll(this);
+            SuggestionRegistry.Outcome outcome;
+            try {
+                outcome = WifiSuggestion.addAll(this);
+            } catch (Exception e) {
+                Log.e(Ensurer.TAG, "mode auto (" + reason + "): suggestion pass failed", e);
+                Diag.error(this, "wifi.suggest.failed", reason
+                        + ": the suggestion pass failed: " + e);
+                return reason + ": the suggestion pass failed (" + e + ")";
+            }
             LocalWifi.state = "auto";
             LocalWifi.detail = outcome.detail();
             Log.i(Ensurer.TAG, "mode auto (" + reason + "): " + LocalWifi.detail);
             Diag.info(this, "svc.mode", reason + ": auto-connect, " + LocalWifi.detail
                     + " (status " + outcome.status() + ")");
+            updateNotification();
+            if (outcome.retryable()) {
+                // Credential storage is still locked: do not claim the mode is
+                // applied, or the unlock would skip the registration.
+                return reason + ": " + outcome.detail();
+            }
+            return null;
         } else {
             WifiSuggestion.removeAll(this);
             if (localWifi == null) {
@@ -185,8 +283,14 @@ public class MonitorService extends Service {
             }
             Log.i(Ensurer.TAG, "mode local-only (" + reason + ")");
             Diag.info(this, "svc.mode", reason + ": local-only");
+            updateNotification();
+            return null;
         }
-        updateNotification();
+    }
+
+    /** The diagnostics snapshot's line about the saved Wi-Fi mode. */
+    static String modeSummary() {
+        return lastModeSummary;
     }
 
     private void startLocalWifi() {
@@ -347,7 +451,7 @@ public class MonitorService extends Service {
         String action = intent == null ? null : intent.getAction();
         boolean unlocked = userUnlocked();
         if (ACTION_RELOAD_LOCAL.equals(action) && unlocked) {
-            applyMode("settings changed");
+            runBoot(BootFlow.Event.SETTINGS_CHANGED);
         } else if (ACTION_CONNECT_LOCAL.equals(action) && unlocked) {
             if (LocalWifi.isAutoMode(this)) {
                 SuggestionRegistry.Outcome outcome = WifiSuggestion.addAll(this);
@@ -368,10 +472,11 @@ public class MonitorService extends Service {
             updateNotification();
         }
         // BOOT_COMPLETED starts the service again after unlock, which is the
-        // fallback if the ACTION_USER_UNLOCKED receiver was missed.
-        if (unlocked && !applied) {
-            applyMode("start command");
-        }
+        // fallback if the ACTION_USER_UNLOCKED receiver was missed. Before
+        // unlock this journals that the mode is waiting instead of applying
+        // an unreadable password.
+        if (unlocked) registerPrefsListener();
+        runBoot(BootFlow.Event.START_COMMAND);
         scheduleEnsure("start command", 0);
         return START_STICKY;
     }
@@ -441,6 +546,10 @@ public class MonitorService extends Service {
             handler.removeCallbacks(pinRecheck);
             pinRecheckPending = false;
         }
+        if (unlockRetry != null) {
+            handler.removeCallbacks(unlockRetry);
+            unlockRetry = null;
+        }
         if (pinExecutor != null) {
             // Interrupts a scheduled task and refuses later submissions; an
             // in-flight probe is bounded by its 400 ms socket timeout.
@@ -478,6 +587,9 @@ public class MonitorService extends Service {
             prefs = null;
         }
         Log.i(Ensurer.TAG, "MonitorService stopped");
+        lastModeSummary = "not applied (service stopped)";
+        Diag.info(this, "svc.stop", "monitor stopped; the saved Wi-Fi mode is applied again"
+                + " when it next starts");
         super.onDestroy();
     }
 

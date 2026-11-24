@@ -29,6 +29,9 @@ fields around it.
 | `pin_result` | the last `pin-adb-port.sh` RESULT line, or `none` |
 | `wifi_result` | the last `wifi-on.sh` RESULT line, or `none` |
 | `last_result` | the last local-only state detail, naming the profile as `local link: <ssid> (<id>)`, or `suggestion <id>: <status>` per profile in auto mode |
+| `wifi_mode` | the saved mode's boot stage: `applied (user unlocked)`, `not applied (waiting for unlock)`, or `not applied (service stopped)` |
+| `wifi_passphrase` | `saved=… missing=… unreadable=…` across the profiles, `no saved network`, or `unavailable (before unlock)`; an unreadable count carries `save the password again` |
+| `suggestion_held` | how many suggestions Android currently reports this app holds, or `unavailable` (before unlock or on Android 10) |
 | `perm.write_secure_settings` | granted / not granted, plus the exact `pm grant` line |
 | `perm.fine_location` | granted / not granted, plus the exact `pm grant` line (not needed before Android 10) |
 | `perm.run_command` | Termux `RUN_COMMAND` grant, plus the exact `pm grant` line; if Termux is missing, the install step comes first |
@@ -62,6 +65,40 @@ Auto-connect keeps one applied record per profile in the encrypted slot
 were actually handed to Android, which is what Android 10 needs for an exact
 removal. An upgrade moves the old single slot to the first profile, so the same
 network is not registered twice.
+
+A matching record is only treated as "active" when Android still reports holding
+that SSID (`getNetworkSuggestions()`, API 30+). If the record survives a reboot
+but the suggestion does not, the pass registers it again and journals
+`wifi.suggest.missing`. An undecryptable record is kept rather than cleared:
+the Keystore may be usable again later, and the ciphertext is the only object
+Android 10 can match for removal. An undecryptable passphrase skips only that
+profile (`wifi.suggest.decrypt_failed`) and the Network page shows
+`password unreadable - save it again` instead of `no password`.
+
+### Reboot and unlock
+
+A reboot starts the monitor at `LOCKED_BOOT_COMPLETED`, before credential-
+protected storage and the Keystore are readable. The saved mode is not applied
+there and the app does not pretend it was. The stages are journalled:
+
+| Code | Stage |
+|---|---|
+| `boot.received` | the boot action, with `before unlock` / `after unlock` |
+| `svc.start` | the service started, with `unlocked=true/false` |
+| `svc.mode.pending` | the saved mode cannot be applied yet (credential storage locked) |
+| `svc.unlocked` | `ACTION_USER_UNLOCKED` arrived and the saved mode is applied |
+| `svc.mode` | the mode was applied; in auto mode it carries the per-profile suggestion status |
+| `svc.mode.failed` | the unlock still could not apply the mode after the bounded retries |
+| `svc.stop` | the monitor stopped, so the mode is not kept |
+| `wifi.suggest.locked` | a suggestion pass was asked for before the first unlock |
+| `wifi.suggest.missing` | the record matched but Android no longer held the suggestion; it was registered again |
+| `wifi.suggest.job` | the persisted job re-registered the suggestions because the monitor service was stopped |
+| `wifi.suggest.job_failed` | that stopped-monitor fallback failed |
+| `wifi.suggest.decrypt_failed` | a profile's passphrase cannot be decrypted; save it again |
+
+The unlock always re-applies the saved mode, even when an earlier start command
+already did: re-registering an identical record is skipped by
+`SuggestionRegistry`, so the pass is cheap and the reboot case cannot be missed.
 
 ### Local-only profile selection
 

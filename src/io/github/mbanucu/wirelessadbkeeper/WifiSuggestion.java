@@ -59,6 +59,16 @@ public final class WifiSuggestion {
      * skipped profile names itself instead of failing the whole pass.
      */
     public static SuggestionRegistry.Outcome addAll(Context c) {
+        // Before the first unlock the Wi-Fi prefs and the Keystore are not
+        // readable. Report that state instead of letting every profile look
+        // like "no password" (-2): the caller waits and tries again after the
+        // user unlocks, when the suggestion can actually be registered.
+        if (!LocalWifi.storageUnlocked(c)) {
+            journal(c, "info", "wifi.suggest.locked",
+                    "credential storage is locked; the suggestion is registered after"
+                            + " the first unlock");
+            return SuggestionRegistry.Outcome.locked();
+        }
         migrateLegacyPrefs(c);
         WifiManager wm = manager(c);
         if (wm == null) {
@@ -116,6 +126,7 @@ public final class WifiSuggestion {
      * so there the applied records are the count.
      */
     public static int count(Context c) {
+        if (!LocalWifi.storageUnlocked(c)) return -1;
         migrateLegacyPrefs(c);
         WifiManager wm = manager(c);
         if (wm == null) return -1;
@@ -161,6 +172,11 @@ public final class WifiSuggestion {
             public void clear(String slot) {
                 PassphraseStore.clearSecret(c, slot);
             }
+
+            @Override
+            public boolean locked() {
+                return !LocalWifi.storageUnlocked(c);
+            }
         };
     }
 
@@ -189,6 +205,13 @@ public final class WifiSuggestion {
                     Log.w(Ensurer.TAG, "wifi suggestion: could not encrypt applied record");
                     journal(c, "warn", "wifi.suggest.record_unsealed",
                             entry.id() + " " + entry.ssid());
+                    break;
+                case READDED:
+                    Log.w(Ensurer.TAG, "wifi suggestion: re-registering missing suggestion for "
+                            + entry.ssid());
+                    journal(c, "warn", "wifi.suggest.missing", entry.id() + " " + entry.ssid()
+                            + ": the applied record matched but Android no longer held the"
+                            + " suggestion; registered it again");
                     break;
                 case CURRENT:
                     Log.i(Ensurer.TAG, "wifi suggestion already present for " + entry.ssid());
@@ -291,6 +314,26 @@ public final class WifiSuggestion {
                 return existing == null ? 0 : existing.size();
             } catch (Exception e) {
                 return -1;
+            }
+        }
+
+        @Override
+        public java.util.Set<String> heldSsids() {
+            if (Build.VERSION.SDK_INT < 30) return null;
+            try {
+                List<WifiNetworkSuggestion> existing = wm.getNetworkSuggestions();
+                if (existing == null) return java.util.Collections.emptySet();
+                java.util.Set<String> ssids = new java.util.LinkedHashSet<>();
+                for (WifiNetworkSuggestion suggestion : existing) {
+                    if (suggestion == null) continue;
+                    String ssid = suggestion.getSsid();
+                    if (ssid != null) ssids.add(ssid);
+                }
+                return ssids;
+            } catch (Exception e) {
+                // Unknown is not the same as empty: an unreadable list must not
+                // make every profile look missing and be re-registered.
+                return null;
             }
         }
     }
