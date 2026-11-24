@@ -3,7 +3,7 @@
 #
 # No device, no pairing and no network: the fake adb answers `pair`, `connect`,
 # `devices` and `shell id` from files in a state directory, and the fake
-# adb-mdns.py returns the ports those files advertise. Wired into
+# adb-connect returns the ports those files advertise. Wired into
 # `./gradlew probeScripts` and therefore `probe`.
 set -u
 
@@ -16,33 +16,33 @@ for f in pair-local.sh discover.sh scan_ports.py; do
     cp "$ROOT/$f" "$WORK/repo/$f" || exit 1
 done
 
-# The fake helper replaces adb-mdns.py in the copied tree, so discovery finds
-# the state files rather than the real zeroconf browser.
-cat > "$WORK/repo/adb-mdns.py" <<'FAKE_MDNS'
+# The fake adb-connect stands in for adb-harness on PATH, so discovery finds
+# the state files rather than the real zeroconf browser. It prints the same
+# lines the installed 0.2.3 CLI does.
+cat > "$WORK/bin/adb-connect" <<'FAKE_ADB_CONNECT'
 #!/bin/sh
 set -u
 state=${FAKE_STATE:?}
-service=${2:-_adb-tls-connect._tcp.local.}
-case "$service" in
-    *_adb-tls-pairing._tcp*) file=pair_ports ;;
-    *) file=connect_ports ;;
+case " $* " in
+    *" --version "*) echo "adb-connect 0.2.3-fake"; exit 0 ;;
 esac
-if [ -f "$state/$file" ]; then
-    cat "$state/$file"
-fi
-FAKE_MDNS
-chmod +x "$WORK/repo/adb-mdns.py"
-
-# discover_mdns_available() asks python3 for zeroconf. The fake only answers
-# that probe; the scenarios here never reach the scan.
-cat > "$WORK/bin/python3" <<'FAKE_PY'
-#!/bin/sh
 if [ "${FAKE_NO_ZEROCONF:-}" = 1 ]; then
+    echo "python-zeroconf is missing: pip install zeroconf" >&2
     exit 1
 fi
-exit 0
-FAKE_PY
-chmod +x "$WORK/bin/python3"
+pair=0
+for arg in "$@"; do
+    [ "$arg" = "--pair" ] && pair=1
+done
+if [ "$pair" = 1 ]; then
+    [ -s "$state/pair_ports" ] || exit 1
+    echo "adb pair 127.0.0.1:$(head -n 1 "$state/pair_ports")"
+else
+    [ -s "$state/connect_ports" ] || exit 1
+    echo "connected to 127.0.0.1:$(head -n 1 "$state/connect_ports")"
+fi
+FAKE_ADB_CONNECT
+chmod +x "$WORK/bin/adb-connect"
 
 cat > "$WORK/bin/adb" <<'FAKE_ADB'
 #!/bin/sh

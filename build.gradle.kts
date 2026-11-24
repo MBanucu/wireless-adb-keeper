@@ -566,6 +566,12 @@ val probeBuildTooling = tasks.register<Exec>("probeBuildTooling") {
     commandLine("bash", layout.projectDirectory.file("tools/build-tooling-test.sh").asFile.absolutePath)
 }
 
+val checkAdbHarness = tasks.register<Exec>("checkAdbHarness") {
+    group = "verification"
+    description = "Fails if mDNS discovery is forked out of the pinned adb-harness; needs no device."
+    commandLine("bash", layout.projectDirectory.file("tools/check-adb-harness.sh").asFile.absolutePath)
+}
+
 val probeAdb = tasks.register<JavaExec>("probeAdb") {
     group = "verification"
     description = "Runs AdbProbe against adbd on the loopback; needs a phone and is never part of CI."
@@ -597,6 +603,7 @@ tasks.register("probe") {
         probeResult,
         probeScripts,
         probeBuildTooling,
+        checkAdbHarness,
     )
 }
 
@@ -605,8 +612,8 @@ tasks.register("probe") {
 // named; that keeps `./gradlew test` meaningful even though there is no JUnit
 // dependency to run.
 tasks.matching { it.name == "test" }.configureEach {
-    dependsOn(checkStagedManifest, checkDependencyPolicy, probeUnit, probeDiag, probeToken, probeResult, probeScripts, probeBuildTooling)
+    dependsOn(checkStagedManifest, checkDependencyPolicy, probeUnit, probeDiag, probeToken, probeResult, probeScripts, probeBuildTooling, checkAdbHarness)
 }
 tasks.named("check") {
-    dependsOn(checkStagedManifest, checkDependencyPolicy, probeUnit, probeDiag, probeToken, probeResult, probeScripts, probeBuildTooling)
+    dependsOn(checkStagedManifest, checkDependencyPolicy, probeUnit, probeDiag, probeToken, probeResult, probeScripts, probeBuildTooling, checkAdbHarness)
 }

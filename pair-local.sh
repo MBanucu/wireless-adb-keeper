@@ -57,18 +57,25 @@ if [ -n "$PAIR_PORT" ]; then
     fi
     echo "== pairing port: $PAIR_PORT (typed) =="
 else
-    echo "== looking for the pairing service ($DISCOVER_PAIRING_SERVICE) =="
-    PAIR_PORT=$(discover_mdns_service "$DISCOVER_PAIRING_SERVICE" "$MDNS_SECONDS" | head -n 1)
+    echo "== looking for the pairing service ($DISCOVER_PAIRING_SERVICE via adb-connect) =="
+    pairing_ports=$(discover_mdns_service "$DISCOVER_PAIRING_SERVICE" "$MDNS_SECONDS")
+    mdns_status=$?
+    PAIR_PORT=$(printf '%s\n' "$pairing_ports" | head -n 1)
     if [ -z "$PAIR_PORT" ]; then
-        if ! discover_mdns_available; then
-            die "no mDNS browser: install python-zeroconf with 'pip install zeroconf', or type the port shown in the dialog: $0 <code> <port>"
+        if [ "$mdns_status" -eq 3 ] || ! discover_mdns_available; then
+            die "no usable mDNS browser: install the pinned adb-harness[mdns] (python-zeroconf) with tools/setup-adb-harness.sh, or type the port shown in the dialog: $0 <code> <port>"
         fi
-        if [ -n "$(discover_mdns_service "$DISCOVER_CONNECT_SERVICE" "$MDNS_SECONDS")" ]; then
+        connect_ports=$(discover_mdns_service "$DISCOVER_CONNECT_SERVICE" "$MDNS_SECONDS")
+        connect_status=$?
+        if [ "$connect_status" -eq 3 ]; then
+            die "no usable mDNS browser: install the pinned adb-harness[mdns] (python-zeroconf) with tools/setup-adb-harness.sh, or type the port shown in the dialog: $0 <code> <port>"
+        fi
+        if [ -n "$connect_ports" ]; then
             die "no pairing service: wireless debugging is on, but \"Pair device with pairing code\" is not open. Open it, keep it on screen, and re-run."
         fi
         die "wireless debugging appears to be off: no pairing or connect advertisement was seen. Turn on Developer options -> Wireless debugging, open \"Pair device with pairing code\", and re-run."
     fi
-    echo "== pairing port: $PAIR_PORT (mDNS) =="
+    echo "== pairing port: $PAIR_PORT (mDNS via adb-connect) =="
 fi
 
 echo "== adb pair 127.0.0.1:$PAIR_PORT =="
@@ -88,8 +95,13 @@ if [ "$pair_status" -ne 0 ]; then
     die "adb pair failed (exit $pair_status). Is wireless debugging still on, with the pairing dialog open?"
 fi
 
-echo "== looking for the adbd connect service ($DISCOVER_CONNECT_SERVICE) =="
+echo "== looking for the adbd connect service ($DISCOVER_CONNECT_SERVICE via adb-connect) =="
 connect_ports=$(discover_mdns_service "$DISCOVER_CONNECT_SERVICE" "$MDNS_SECONDS")
+connect_status=$?
+if [ "$connect_status" -eq 3 ]; then
+    echo "-- adb-connect unavailable; using the shared discovery helper --"
+    connect_ports=
+fi
 if [ -z "$connect_ports" ]; then
     echo "-- no mDNS advertisement; using the shared discovery helper --"
     connect_ports=$(discover_ports)

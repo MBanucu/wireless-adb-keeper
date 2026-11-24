@@ -20,7 +20,7 @@ Neither half can be solved by the app alone:
 | Re-enable wireless debugging | the app (`WRITE_SECURE_SETTINGS`) | Termux cannot write secure settings |
 | Reconnect to Wi-Fi silently | the app (`WifiNetworkSuggestion`) | — |
 | Run `adb connect` | Termux | apps cannot run the adb client |
-| Learn adbd's port | Termux via mDNS | apps cannot read `/proc/net/tcp`, and adbd's port is not exposed in any property |
+| Learn adbd's port | Termux via `adb-connect` (mDNS) | apps cannot read `/proc/net/tcp`, and adbd's port is not exposed in any property |
 | Pin adbd to port 5555 | Termux (the app asks it to) | `tcpip` is an adb *service request*: it needs an adb client holding a paired key, and the property it sets (`service.adb.tcp.port`) is refused to `setprop` from the shell user |
 
 ## Components
@@ -86,9 +86,14 @@ samples and cannot be published, so it is the GitHub-handle form instead.
   which keeps working with the radio off because it goes through loopback. Tries the
   pinned port first, then any serial adb already holds. Run by the app's
   **Turn Wi-Fi on** button. Ends with `RESULT wifi=on` or `RESULT error=...`.
-- `adb-mdns.py` — reads adbd's own `_adb-tls-connect._tcp` advertisement with
-  `python-zeroconf`, filters out stale advertisements, and prints the live port.
-  Needs `pip install zeroconf`; without it the keepalive falls back to scanning.
+- `adb-connect` — the mDNS browser from `adb-harness[mdns]` (pinned in
+  `tools/requirements.txt`). It reads adbd's own `_adb-tls-connect._tcp` or
+  `_adb-tls-pairing._tcp` advertisement and hands the live port to adb; for a
+  connect port it only reports one that `adb connect` reaches, so stale records
+  are discarded. `discover.sh` runs it from
+  `tools/.venv` (created by `tools/setup-adb-harness.sh`) or from `PATH`; without
+  it the keepalive falls back to scanning. The local `adb-mdns.py` fork is gone
+  (#68), and `tools/check-adb-harness.sh` fails if one grows back.
 - `reconnect.sh` / `wait_adb.sh` — one-shot reconnect and a bounded "wait for adbd to
   appear" helper, useful after rebooting the phone. Both try the pinned port first;
   `wait_adb.sh` ends with `RESULT connected=<port>` or `RESULT error=timeout`.
@@ -132,7 +137,8 @@ unlock; unlocking is then only needed for the laptop's own uplink.
 - Canonical APK (`tools/termux-build.sh`): JDK 17+, Android SDK platform 35, and
   Termux's bionic `aapt2` (`pkg install aapt`). The wrapper pins Gradle 9.9.2
   and AGP 9.5.2.
-- For the watchdog: `python3`, `zeroconf` (optional), `termux-wake-lock`
+- For the watchdog: `python3`, `adb-harness[mdns]==0.2.3` (optional; enables
+  mDNS discovery — `bash tools/setup-adb-harness.sh`), `termux-wake-lock`
   (Termux:API not required for the lock itself; the `termux-wake-lock` binary ships
   with Termux).
 
@@ -335,9 +341,9 @@ Verified without a phone:
   [PAIRING CODE]`. That proves the client command exists, not that adbd accepts
   a loopback pairing connection.
 - `adb mdns services` is not usable here: this adb says `mdns is not supported
-  by this version of adb`. The browser is `adb-mdns.py`, the same zeroconf path
-  the keeper already uses for the connect port; it now takes the service name
-  as an argument and browses `_adb-tls-pairing._tcp.local.` for this script.
+  by this version of adb`. The browser is `adb-connect --pair` from `adb-harness`
+  (the same dependency and zeroconf path the keeper uses for the connect port);
+  `pair-local.sh` browses `_adb-tls-pairing._tcp.local.` through it.
 - With a fake adb and fake mDNS (`tools/pair-local-test.sh`,
   `./gradlew probeScripts`) the flow covers success, wrong code, wireless
   debugging off, no pairing service, a stale port, no mDNS, a typed port, and
@@ -396,12 +402,20 @@ them executable:
 
 ```bash
 mkdir -p ~/wireless-adb-keeper
-cp pin-adb-port.sh wifi-on.sh discover.sh scan_ports.py adb-mdns.py ~/wireless-adb-keeper/
+cp pin-adb-port.sh wifi-on.sh discover.sh scan_ports.py ~/wireless-adb-keeper/
 chmod +x ~/wireless-adb-keeper/*.sh ~/wireless-adb-keeper/*.py
+
+# mDNS discovery is adb-connect from the pinned adb-harness[mdns].
+# A venv beside the runtime scripts is what discover.sh prefers:
+ADB_HARNESS_VENV=~/wireless-adb-keeper/tools/.venv \
+    bash tools/setup-adb-harness.sh
+# ... or install the pinned extra and let discover.sh find it on PATH:
+pip install "adb-harness[mdns]==0.2.3"
 ```
 
 An existing install at `~/wireless-adb-keeper/` must re-run that command after
-upgrading: `pin-adb-port.sh` now needs `discover.sh` and `scan_ports.py` beside it.
+upgrading: `pin-adb-port.sh` now needs `discover.sh`, `scan_ports.py` and
+`adb-connect` (from adb-harness) beside it or on `PATH`.
 Termux 0.109+ sends the script's exit code, stdout and stderr back, so a missing
 helper now shows its own error under **Pin result** and in the journal; older
 Termux still only sees the port stay closed (#37).
@@ -706,8 +720,8 @@ Caveats:
 ## Watchdog
 
 ```bash
-pip install zeroconf            # optional, enables mDNS port discovery
-./adb-keepalive.sh &            # foreground: omit "&"
+bash tools/setup-adb-harness.sh  # optional, enables mDNS port discovery
+./adb-keepalive.sh &             # foreground: omit "&"
 ```
 
 Log: `adb-keepalive.log`
@@ -732,8 +746,12 @@ standard mDNS and any browser can read it — no adb support required.
 adb-<device>._adb-tls-connect._tcp.local.  port 32997
 ```
 
-Stale advertisements can outlive the adbd that made them, so the helper only reports
-ports that still accept a TCP connection.
+`discover.sh` runs `adb-connect` from `adb-harness[mdns]` (pinned in
+`tools/requirements.txt`) for that lookup: it browses the service and only reports a
+port after `adb connect` reaches a device, so a stale advertisement outliving its
+adbd is discarded. `pair-local.sh` uses the same command with `--pair` for
+`_adb-tls-pairing._tcp`. The CLI is the only supported interface; the local
+zeroconf fork was deleted in #68 and `tools/check-adb-harness.sh` keeps it out.
 
 When an adb serial is already attached, `discover.sh` asks the phone instead:
 `adb shell cat /proc/net/tcp /proc/net/tcp6` lists every listening socket (state `0A`,

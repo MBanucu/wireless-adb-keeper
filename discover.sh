@@ -29,23 +29,116 @@ if [ -z "${PORT_START:-}" ] || [ -z "${PORT_END:-}" ]; then
     unset _discover_kstart _discover_kend
 fi
 
+# mDNS discovery is `adb-connect` from adb-harness (pinned in
+# tools/requirements.txt); the local adb-mdns.py fork was retired in #68.
+# Resolution order: ADB_CONNECT when the caller sets it (an empty value
+# disables mDNS), then the pinned venv beside this script, then PATH.
+_DISCOVER_ADB_CONNECT=
+_DISCOVER_ADB_CONNECT_RESOLVED=0
+
+discover_mdns_command() {
+    if [ "$_DISCOVER_ADB_CONNECT_RESOLVED" = 0 ]; then
+        _DISCOVER_ADB_CONNECT_RESOLVED=1
+        _DISCOVER_ADB_CONNECT=
+        if [ "${ADB_CONNECT+set}" = set ]; then
+            case "${ADB_CONNECT:-}" in
+                '') ;;
+                */*)
+                    [ -x "$ADB_CONNECT" ] && _DISCOVER_ADB_CONNECT=$ADB_CONNECT
+                    ;;
+                *)
+                    _DISCOVER_ADB_CONNECT=$(command -v "$ADB_CONNECT" 2>/dev/null || true)
+                    ;;
+            esac
+        else
+            for candidate in "$DISCOVER_DIR/tools/.venv/bin/adb-connect" \
+                    "$DISCOVER_DIR/.venv/bin/adb-connect"; do
+                if [ -x "$candidate" ]; then
+                    _DISCOVER_ADB_CONNECT=$candidate
+                    break
+                fi
+            done
+            if [ -z "$_DISCOVER_ADB_CONNECT" ]; then
+                _DISCOVER_ADB_CONNECT=$(command -v adb-connect 2>/dev/null || true)
+            fi
+        fi
+    fi
+    printf '%s\n' "$_DISCOVER_ADB_CONNECT"
+}
+
 # discover_serial: serial of the first attached device, if any.
 discover_serial() {
     adb devices 2>/dev/null | awk 'NR > 1 && $2 == "device" { print $1; exit }'
 }
 
-# discover_mdns_available: the advertisement can be read directly.
+# discover_mdns_available: the adb-harness browser can be run.
 discover_mdns_available() {
-    [ -x "$DISCOVER_DIR/adb-mdns.py" ] &&
-        python3 -c 'import zeroconf' >/dev/null 2>&1
+    local cmd
+    cmd=$(discover_mdns_command)
+    [ -n "$cmd" ] && [ -x "$cmd" ]
+}
+
+# discover_mdns_version: what the browser is, and which exit-code contract it
+# speaks. PyPI 0.2.3 predates the documented 0/1/2/3 table and only exits 0 on
+# success and 1 on a failure; say so instead of pretending the codes differ.
+discover_mdns_version() {
+    local cmd out
+    cmd=$(discover_mdns_command)
+    if [ -z "$cmd" ]; then
+        printf 'none (mDNS disabled)\n'
+        return 0
+    fi
+    if out=$("$cmd" --version 2>/dev/null) && [ -n "$out" ]; then
+        printf '%s (0/1/2/3 exit codes)\n' "$out"
+    else
+        printf '%s (predates --version: only 0/1, 1 means no advertisement)\n' "$cmd"
+    fi
 }
 
 # discover_mdns_service <service> [seconds]: ports for one advertised service.
+# Returns 0 with ports, 1 when nothing is advertised, 3 when the browser or a
+# prerequisite is missing. The 3 is what lets callers tell "wireless debugging
+# is off" from "adb-harness is not installed"; older adb-harness releases have
+# no exit 3, so their stderr is checked for the same two prerequisites.
 discover_mdns_service() {
-    local service="${1:-}" seconds="${2:-3}"
-    [ -n "$service" ] || return 0
-    discover_mdns_available || return 0
-    "$DISCOVER_DIR/adb-mdns.py" "$seconds" "$service" 2>/dev/null
+    local service="${1:-}" seconds="${2:-3}" cmd out rc ports pairing=0
+    [ -n "$service" ] || return 1
+    discover_mdns_available || return 3
+    cmd=$(discover_mdns_command)
+    case "$service" in
+        "$DISCOVER_PAIRING_SERVICE") pairing=1 ;;
+    esac
+    if [ "$pairing" = 1 ]; then
+        out=$("$cmd" --pair --timeout "$seconds" 2>&1)
+    else
+        out=$("$cmd" --timeout "$seconds" 2>&1)
+    fi
+    rc=$?
+    case "$rc" in
+        0) ;;
+        1)
+            # New contract: nothing advertised or nothing answered. Older
+            # releases also use 1 for a missing prerequisite; their message is
+            # the only way to tell, so every caller falls back to the scan.
+            case "$out" in
+                *"zeroconf is missing"*|*"adb is not in PATH"*) return 3 ;;
+            esac
+            return 1
+            ;;
+        2) return 3 ;;  # usage error: a flag the installed release does not know
+        3) return 3 ;;  # documented prerequisite: no adb or no python-zeroconf
+        *) return 3 ;;  # anything else is unusable, so fall back rather than hang
+    esac
+    if [ "$pairing" = 1 ]; then
+        ports=$(printf '%s\n' "$out" |
+            sed -n 's/^adb pair .*:\([0-9][0-9]*\)$/\1/p')
+    else
+        ports=$(printf '%s\n' "$out" | tr ',' '\n' | sed -n \
+            -e 's/^connected to .*:\([0-9][0-9]*\)$/\1/p' \
+            -e 's/^already connected: .*:\([0-9][0-9]*\).*$/\1/p')
+    fi
+    [ -n "$ports" ] || return 1
+    printf '%s\n' "$ports" | awk '!seen[$0]++'
 }
 
 # discover_mdns [seconds]: ports adbd advertises for connecting, newest first.

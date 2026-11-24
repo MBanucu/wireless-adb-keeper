@@ -228,6 +228,26 @@ grant keeps wireless debugging on, re-pins 5555, and turns the radio on.
 Bump version, regenerate the screenshots that show Termux wording, tag a release,
 close #1 with the measured numbers.
 
+## Adopting the extracted libraries · [#68](https://github.com/MBanucu/wireless-adb-keeper/issues/68)
+
+The mechanisms extracted from this repo move in one slice at a time; the app's
+own decisions stay here. Only the mDNS discovery slice has a released
+dependency, so it is the only one adopted now.
+
+| piece | state |
+| --- | --- |
+| mDNS discovery: `adb-mdns.py` → `adb-connect` | **done.** `adb-harness[mdns]==0.2.3` is pinned in `tools/requirements.txt`; `discover.sh` runs it from `tools/.venv` or `PATH`. `scan_ports.py` stays until adb-harness grows the TCP-table/loopback scan fallback. `tools/check-adb-harness.sh` fails if a zeroconf browser or `adb-mdns.py` comes back. |
+| `TermuxResult` / `TermuxResultService` → `termux-run-command` | **blocked on a release.** Not on Maven Central yet. Keep the local copies and the pin-specific freshness/fallback logic (`RESULT_FRESH_MS`, `FALLBACK_MS`, `noteProbeFallback`) until it is. |
+| `ControlProvider` / `ControlReceiver` / `ControlToken` → `android-control-surface` | **blocked on a release.** Not on Maven Central yet. `keeperctl.sh` output and the existing `--method` names must not change when it lands. |
+| `build.sh` → `termux-apkbuild` | **blocked on a release.** The Gradle path stays untouched. |
+| CI guard for raw `RUN_COMMAND_` strings and `ContentProvider` CRUD stubs | still open; this slice adds only the mDNS guard. |
+
+`adb-harness` 0.2.3 is the newest PyPI release and predates its documented
+0/1/2/3 exit-code table (it only distinguishes 0 and 1). `discover.sh` branches
+on the full table when the installed version supports it and treats the older
+`1` as "nothing advertised" after checking for a missing prerequisite, so
+pinning 0.2.3 now does not block a later bump.
+
 ## Out of scope
 
 - Persistent 5555 across reboot: `persist.adb.tcp.port` is refused to both shell and

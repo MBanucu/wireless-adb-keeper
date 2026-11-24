@@ -18,6 +18,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # #68: mDNS discovery is adb-connect from the pinned adb-harness[mdns].
+      # This fails if a raw zeroconf browser (or the old adb-mdns.py) comes back.
+      - name: Keep mDNS discovery in adb-harness
+        run: bash tools/check-adb-harness.sh
+
       # Two halves of the wrapper: the JAR against Gradle's published
       # checksums, and the distribution URL against its published .sha256.
       - name: Validate the Gradle wrapper JAR
