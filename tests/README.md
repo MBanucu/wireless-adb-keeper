@@ -14,6 +14,7 @@ tests/
   unit/harness/SuiteRunner.java        # runs every named suite in one JVM
   unit/harness/TestSupport.java        # ok/FAIL lines, counts, exit code
   unit/java/.../*Test.java             # the suites
+  unit/fixtures/local_wifi.xml         # pre-profiles prefs shape, no secret
 ```
 
 `unit.sh` finds every `*Test.java`, derives its class name from the path, and
@@ -158,8 +159,15 @@ for the device-protected storage entry points, which the suites never call.
 They need the jar to compile, like the app itself; the suites over pure classes
 (`DiagFormat`, `DiagJournal`, `DiagRetention`, `DiagRotation`, `DiagSnapshot`,
 `DiagReasons`, `PermissionAudit`, `SuggestionRecord`, `SuggestionRegistry`,
-`ProfileTable`, `NetworkRows`, `Backoff`, `EnsureDecision`, `ControlArgs`,
-`Base64Codec`, `Provider`, `TermuxResult`, `VerboseLog`) do not.
+`ProfileTable`, `Selection`, `NetworkRows`, `Backoff`, `EnsureDecision`,
+`ControlArgs`, `Base64Codec`, `Provider`, `TermuxResult`, `VerboseLog`) do not.
+
+The store suite's migration fixture is `unit/fixtures/local_wifi.xml`, shaped
+like a real pre-profiles `shared_prefs/local_wifi.xml`: the legacy `ssid`, the
+encrypted passphrase slot and the monitor settings. Its ciphertext and IV are
+placeholders, not a secret; the suite supplies its own canary through the
+`PassphraseStore` fake, so no credential is committed and the loader can prove
+the pre-migration shape on a plain JVM.
 
 ## The device suite
 

@@ -4,12 +4,18 @@ import static io.github.mbanucu.wirelessadbkeeper.harness.TestSupport.check;
 import static io.github.mbanucu.wirelessadbkeeper.harness.TestSupport.checkTrue;
 import static io.github.mbanucu.wirelessadbkeeper.harness.TestSupport.report;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * The saved-network store without Android: the legacy migration, the one-per-
@@ -19,11 +25,21 @@ import java.util.Set;
  */
 public final class ProfileTableTest {
 
+    /** A value only the test knows; the fixture on disk never contains it. */
+    private static final String FIXTURE_SECRET = "fixture-canary-pass";
+    private static final String FIXTURE_PATH = "tests/unit/fixtures/local_wifi.xml";
+    private static final Pattern STRING_ENTRY = Pattern.compile(
+            "<string name=\"([^\"]+)\">([^<]*)</string>");
+    private static final Pattern VALUE_ENTRY = Pattern.compile(
+            "<(?:boolean|int|long|float) name=\"([^\"]+)\" value=\"([^\"]*)\"\\s*/>");
+
     private ProfileTableTest() {
     }
 
     public static void main(String[] args) {
         migrationMovesTheLegacyNetworkToDefault();
+        migrationFromARealPrefsFixtureKeepsTheNetwork();
+        migrationFromARealPrefsFixtureWithoutASecretStillYieldsAProfile();
         migrationWithoutALegacyNetworkDoesNothing();
         migrationSecretFailureRetriesLater();
         capRefusesTheSeventeenthAndKeepsTheSixteen();
@@ -63,6 +79,55 @@ public final class ProfileTableTest {
                 secrets.legacy);
         check("a second read does not duplicate", 1, table.list().size());
         check("listing twice writes the migration once", 1, store.writes);
+    }
+
+    private static void migrationFromARealPrefsFixtureKeepsTheNetwork() {
+        String xml = fixtureText();
+        checkTrue("the fixture is shaped like local_wifi.xml",
+                xml.contains("name=\"ssid\""));
+        checkTrue("the fixture has an encrypted passphrase slot",
+                xml.contains("name=\"passphrase_ciphertext\""));
+        checkTrue("the fixture carries no secret value", !xml.contains(FIXTURE_SECRET));
+
+        MapStore store = fixtureStore(xml);
+        MapSecrets secrets = new MapSecrets();
+        secrets.legacy = FIXTURE_SECRET;
+        ProfileTable firstRun = new ProfileTable(store, secrets);
+        List<Profile> migrated = firstRun.list();
+
+        check("the pre-profiles fixture migrates to one profile", 1, migrated.size());
+        check("the fixture profile is the legacy SSID", "Home", migrated.get(0).ssid());
+        check("the fixture profile is default", ProfileTable.DEFAULT_ID,
+                migrated.get(0).id());
+        check("the fixture passphrase moves to the profile slot", FIXTURE_SECRET,
+                secrets.slots.get(ProfileTable.secretSlot(ProfileTable.DEFAULT_ID)));
+        check("the fixture legacy SSID key is gone", null,
+                store.values.get(ProfileTable.LEGACY_SSID_KEY));
+        check("the fixture migration writes once", 1, store.writes);
+
+        ProfileTable secondRun = new ProfileTable(store, secrets);
+        check("running the migration again leaves one profile", 1,
+                secondRun.list().size());
+        check("running the migration again writes nothing", 1, store.writes);
+    }
+
+    private static void migrationFromARealPrefsFixtureWithoutASecretStillYieldsAProfile() {
+        MapStore store = fixtureStore(fixtureText());
+        // The legacy ssid is present but no passphrase was ever saved.
+        MapSecrets secrets = new MapSecrets();
+        ProfileTable table = new ProfileTable(store, secrets);
+
+        List<Profile> list = table.list();
+
+        check("a legacy SSID with no secret still migrates", 1, list.size());
+        check("the half-migrated profile keeps the SSID", "Home", list.get(0).ssid());
+        check("the half-migrated profile has no password", false,
+                secrets.slots.containsKey(
+                        ProfileTable.secretSlot(ProfileTable.DEFAULT_ID)));
+        check("the half-migrated legacy SSID key is gone", null,
+                store.values.get(ProfileTable.LEGACY_SSID_KEY));
+        check("a second read of the half-migrated state is still one profile", 1,
+                table.list().size());
     }
 
     private static void migrationWithoutALegacyNetworkDoesNothing() {
@@ -324,6 +389,54 @@ public final class ProfileTableTest {
         check("the migrated default stays first", "default,p1,p2",
                 store.values.get(ProfileTable.IDS_KEY));
         check("ids are opaque, not SSIDs", "p1", table.list().get(1).id());
+    }
+
+    /** The fixture is found from the working directory, as unit.sh runs it. */
+    private static String fixtureText() {
+        File at = new File(System.getProperty("user.dir", ".")).getAbsoluteFile();
+        for (; at != null; at = at.getParentFile()) {
+            File candidate = new File(at, FIXTURE_PATH);
+            if (candidate.isFile()) {
+                try {
+                    return Files.readString(candidate.toPath(), StandardCharsets.UTF_8);
+                } catch (IOException e) {
+                    throw new AssertionError("cannot read " + candidate, e);
+                }
+            }
+        }
+        throw new AssertionError("fixture not found: " + FIXTURE_PATH);
+    }
+
+    /**
+     * The fixture's prefs as map entries. Secret-shaped keys stay out: the fake
+     * keeps PassphraseStore's slots apart from the non-secret prefs, as the
+     * adapter does.
+     */
+    private static MapStore fixtureStore(String xml) {
+        MapStore store = new MapStore();
+        for (Map.Entry<String, String> entry : prefsFromFixture(xml).entrySet()) {
+            if (isSecretKey(entry.getKey())) continue;
+            store.values.put(entry.getKey(), entry.getValue());
+        }
+        return store;
+    }
+
+    private static Map<String, String> prefsFromFixture(String xml) {
+        Map<String, String> values = new LinkedHashMap<>();
+        Matcher strings = STRING_ENTRY.matcher(xml);
+        while (strings.find()) {
+            values.put(strings.group(1), strings.group(2));
+        }
+        Matcher typed = VALUE_ENTRY.matcher(xml);
+        while (typed.find()) {
+            values.put(typed.group(1), typed.group(2));
+        }
+        return values;
+    }
+
+    private static boolean isSecretKey(String key) {
+        return "passphrase".equals(key) || key.endsWith("_ciphertext")
+                || key.endsWith("_iv");
     }
 
     private static void assertNoValueContains(Map<String, String> values, String secret) {
