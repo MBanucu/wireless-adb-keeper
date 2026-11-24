@@ -43,6 +43,7 @@ public class PairActivity extends Activity {
     private Button verifyButton;
     private String endpointHost;
     private int endpointPort;
+    private boolean verifyAfterPair;
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     private int dp(int value) {
@@ -56,18 +57,30 @@ public class PairActivity extends Activity {
         endpointHost = getIntent().getStringExtra("pair_host");
         endpointPort = getIntent().getIntExtra("pair_port", 0);
         final String launchCode = getIntent().getStringExtra("pair_code");
+        final boolean launchVerify = getIntent().getBooleanExtra("pair_verify", false);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         setContentView(buildUi());
-        if (savedInstanceState == null && launchCode != null && !launchCode.isEmpty()) {
-            // Allows the one-time pairing to be driven from adb:
-            // am start ... --es pair_code 123456 --es pair_host <ip> --ei pair_port <port>
-            codeField.setText(launchCode);
-            pairButton.post(new Runnable() {
-                @Override
-                public void run() {
-                    pairButton.performClick();
-                }
-            });
+        if (savedInstanceState == null) {
+            if (launchCode != null && !launchCode.isEmpty()) {
+                // Allows the one-time pairing to be driven from adb:
+                // am start ... --es pair_code 123456 --es pair_host <ip> --ei pair_port <port>
+                codeField.setText(launchCode);
+                verifyAfterPair = launchVerify;
+                pairButton.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        pairButton.performClick();
+                    }
+                });
+            } else if (launchVerify) {
+                // am start ... --ez pair_verify true
+                verifyButton.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        verifyButton.performClick();
+                    }
+                });
+            }
         }
     }
 
@@ -224,6 +237,10 @@ public class PairActivity extends Activity {
                         } finally {
                             pairButton.setEnabled(true);
                             verifyButton.setEnabled(true);
+                        }
+                        if (verifyAfterPair && result.startsWith("Paired")) {
+                            verifyAfterPair = false;
+                            verifyButton.performClick();
                         }
                     }
                 });

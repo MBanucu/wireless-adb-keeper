@@ -372,6 +372,28 @@ The one-time setup, for the canonical Gradle build only:
    while it is open.
 3. Type the 6-digit code into the app and tap **Pair**.
 
+The exported pairing screen can also be driven from adb. `pair_host` and
+`pair_port` are optional; without them the app discovers the pairing port over
+mDNS. The code still has to be the one the system dialog is showing.
+
+```bash
+adb shell am start -n io.github.mbanucu.wirelessadbkeeper/.PairActivity \
+  --es pair_code 123456 \
+  --es pair_host 192.168.77.232 \
+  --ei pair_port 37123
+```
+
+`--ez pair_verify true` runs **Test connection** directly, or runs it
+after a successful pairing when combined with `pair_code`:
+
+```bash
+adb shell am start -n io.github.mbanucu.wirelessadbkeeper/.PairActivity \
+  --ez pair_verify true
+```
+
+The result is shown on the screen and logged under the `WirelessAdbKeeper`
+tag (`adb logcat -s WirelessAdbKeeper`).
+
 `AdbCertificate` gives the existing key a self-signed certificate beside it in
 device-protected storage (built as DER by hand, so `src/` needs no BouncyCastle;
 `keytool -printcert` reads it back as v3, SHA256withRSA, 2048-bit,
