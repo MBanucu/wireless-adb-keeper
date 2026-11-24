@@ -137,6 +137,15 @@ public final class Keeper {
      * {@code save SSID} is the command that creates.
      */
     public static String saveProfile(Context c, String id, String ssid, String passphrase) {
+        return saveProfile(c, id, ssid, null, passphrase);
+    }
+
+    /**
+     * The editor's spelling of {@link #saveProfile}: it can set the security in
+     * the same write. A null security keeps the stored one, as the CLI does.
+     */
+    public static String saveProfile(Context c, String id, String ssid, String security,
+                                     String passphrase) {
         String cleanId = id == null ? "" : id.trim();
         if (cleanId.isEmpty()) {
             return fail(c, DiagReasons.Failure.PROFILE_UNKNOWN,
@@ -145,7 +154,7 @@ public final class Keeper {
         if (ssid == null || ssid.trim().isEmpty()) {
             return fail(c, DiagReasons.Failure.SSID_MISSING, "ssid is required");
         }
-        ProfileTable.Outcome saved = Profiles.update(c, cleanId, ssid, null, passphrase);
+        ProfileTable.Outcome saved = Profiles.update(c, cleanId, ssid, security, passphrase);
         if (!saved.ok()) {
             return profileFailure(c, saved.error());
         }
@@ -156,6 +165,67 @@ public final class Keeper {
                 + ", ssid=" + saved.profile().ssid()
                 + ", passphrase=" + (savedPass == null || savedPass.isEmpty() ? "none" : "set")
                 + ", reload=" + reloadTarget();
+    }
+
+    /**
+     * Adds a network from the UI, or updates the profile with that SSID. The
+     * security can be chosen in the same write; {@link #saveNetwork} keeps its
+     * two-argument behaviour for the CLI.
+     */
+    public static String addNetwork(Context c, String ssid, String security,
+                                    String passphrase) {
+        if (ssid == null || ssid.trim().isEmpty()) {
+            return fail(c, DiagReasons.Failure.SSID_MISSING, "ssid is required");
+        }
+        boolean existed = Profiles.bySsid(c, ssid) != null;
+        ProfileTable.Outcome saved = Profiles.add(c, ssid, security, passphrase);
+        if (!saved.ok()) {
+            return profileFailure(c, saved.error());
+        }
+        LocalWifi.bumpRevision(c);
+        profileChanged(c, existed ? DiagReasons.ProfileChange.UPDATED
+                : DiagReasons.ProfileChange.ADDED, saved.profile());
+        String savedPass = Profiles.secret(c, saved.profile().id());
+        return "id=" + saved.profile().id()
+                + ", ssid=" + saved.profile().ssid()
+                + ", security=" + ControlText.security(saved.profile().security())
+                + ", passphrase=" + (savedPass == null || savedPass.isEmpty() ? "none" : "set")
+                + ", reload=" + reloadTarget();
+    }
+
+    /**
+     * Clears one profile's password without touching its SSID, security or
+     * position. This is the UI's explicit "clear" action; an empty password
+     * field on Save means keep, never clear.
+     */
+    public static String clearProfilePassword(Context c, String id) {
+        String cleanId = id == null ? "" : id.trim();
+        if (cleanId.isEmpty()) {
+            return fail(c, DiagReasons.Failure.PROFILE_UNKNOWN,
+                    DiagReasons.profileDetail(ProfileTable.ERROR_UNKNOWN));
+        }
+        List<Profile> profiles = Profiles.list(c);
+        Profile found = null;
+        for (Profile profile : profiles) {
+            if (profile.id().equals(cleanId)) {
+                found = profile;
+                break;
+            }
+        }
+        if (found == null) {
+            return fail(c, DiagReasons.Failure.PROFILE_UNKNOWN,
+                    DiagReasons.profileDetail(ProfileTable.ERROR_UNKNOWN));
+        }
+        ProfileTable.Outcome cleared = Profiles.update(c, cleanId, found.ssid(),
+                found.security(), "");
+        if (!cleared.ok()) {
+            return profileFailure(c, cleared.error());
+        }
+        LocalWifi.bumpRevision(c);
+        profileChanged(c, DiagReasons.ProfileChange.UPDATED, cleared.profile());
+        return "id=" + cleared.profile().id()
+                + ", ssid=" + cleared.profile().ssid()
+                + ", passphrase=none, reload=" + reloadTarget();
     }
 
     /**

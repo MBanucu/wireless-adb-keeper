@@ -340,9 +340,14 @@ Termux 0.109+ sends the script's exit code, stdout and stderr back, so a missing
 helper now shows its own error under **Pin result** and in the journal; older
 Termux still only sees the port stay closed (#37).
 
-Open the app, enter the Wi-Fi SSID and password (both modes need it; open networks need
-none), tap **Save**, then **Connect now** and approve the "available networks"
-notification once. Leave **Connect mode** on `auto-connect`.
+Open the app's **Network** page: each saved network is a row with its SSID,
+security badge, whether a password is stored and the last suggestion state. Tap
+a row to edit it, or **Add network** to start a new one; the password field is
+always empty and leaving it empty keeps the stored secret. The up/down arrows
+set the try order; the first row is marked **ACTIVE**. **Delete** asks for
+confirmation and discards that network's password. Then tap **Connect now** and
+approve the "available networks" notification once. Leave **Connect mode** on
+`auto-connect`. With nothing saved the page says **No network saved**.
 
 ## Control from adb
 

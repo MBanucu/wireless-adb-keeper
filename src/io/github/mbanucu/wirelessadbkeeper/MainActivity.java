@@ -1,6 +1,7 @@
 package io.github.mbanucu.wirelessadbkeeper;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.job.JobInfo;
 import android.app.job.JobScheduler;
 import android.content.ComponentName;
@@ -35,6 +36,8 @@ import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.List;
+
 public class MainActivity extends Activity {
     // A small fixed palette so the screen reads the same on every device theme.
     private static final int ACCENT = 0xFF3B5BDB;
@@ -46,9 +49,16 @@ public class MainActivity extends Activity {
     private static final int HAIRLINE = 0xFFD1D5DB;
 
     private static final String[] PAGE_TITLES = {"Status", "Connect", "Network", "Diag", "Help"};
+    /** Index of the profiles page; reopening it re-reads the store. */
+    private static final int PAGE_NETWORK = 2;
     /** Index of the diagnostics page; the Help page keeps the last slot. */
     private static final int PAGE_DIAG = 3;
     private static final String STATE_PAGE = "page";
+    /** The store's security values, in cycle order for the editor's button. */
+    private static final String[] SECURITY_VALUES = {
+            ProfileTable.SECURITY_AUTO, ProfileTable.SECURITY_WPA2,
+            ProfileTable.SECURITY_WPA3, ProfileTable.SECURITY_OWE,
+            ProfileTable.SECURITY_OPEN};
 
     private LinearLayout statusBox;
     private TextView diagStatus;
@@ -58,8 +68,11 @@ public class MainActivity extends Activity {
     private CompoundButton.OnCheckedChangeListener verboseListener;
     private Button serviceButton;
     private Button localButton;
-    private EditText ssidField;
-    private EditText passField;
+    private LinearLayout profileListBox;
+    private Button addProfileButton;
+    /** The expanded profile id, or null; a new-network editor uses {@link #addingProfile}. */
+    private String expandedProfileId;
+    private boolean addingProfile;
     private View[] pages;
     private View[] navIndicators;
     private TextView[] navLabels;
@@ -301,57 +314,322 @@ public class MainActivity extends Activity {
     private View pageNetwork() {
         LinearLayout root = column();
         pageHeader(root, "Network",
-                "The Wi-Fi network to rejoin, and the password it uses.");
+                "Saved Wi-Fi networks, in the order the keeper tries them. The first one is active.");
 
-        root.addView(sectionLabel("Saved network"));
-        ssidField = field("SSID", InputType.TYPE_CLASS_TEXT);
-        ssidField.setText(LocalWifi.ssid(this));
-        ssidField.setLayoutParams(spaced(matchWrap(), 10));
-        root.addView(ssidField);
+        root.addView(sectionLabel("Saved networks"));
+        TextView hint = text("Tap a network to edit it. The arrows set the try order;"
+                + " the first network is active.", 12, MUTED);
+        hint.setLineSpacing(dp(2), 1f);
+        hint.setLayoutParams(spaced(matchWrap(), 0));
+        root.addView(hint);
+        profileListBox = new LinearLayout(this);
+        profileListBox.setOrientation(LinearLayout.VERTICAL);
+        root.addView(profileListBox, matchWrap());
 
-        // Never write the saved passphrase back into the field: a screenshot or
-        // a glance is enough to leak it. The hint only says whether one exists.
-        passField = field(passphraseHint(),
+        addProfileButton = action(root, "Add network",
+                "Starts an empty editor. Nothing is written until you tap Save.",
+                true, new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        addingProfile = !addingProfile;
+                        expandedProfileId = null;
+                        renderProfiles();
+                    }
+                });
+        renderProfiles();
+        return scrollOf(root);
+    }
+
+    /**
+     * Rebuilds every row from the store. Called after every change and when the
+     * page is shown, so a row can never show a value another screen has
+     * replaced; the password is only ever read as a state, never into a view.
+     */
+    private void renderProfiles() {
+        if (profileListBox == null) return;
+        profileListBox.removeAllViews();
+        List<ProfileRow> rows = Profiles.rows(this);
+        if (rows.isEmpty() && !addingProfile) {
+            profileListBox.addView(emptyProfiles(), spaced(matchWrap(), 8));
+        }
+        for (ProfileRow row : rows) {
+            profileListBox.addView(profileCard(row), spaced(matchWrap(), 8));
+        }
+        if (addingProfile) {
+            profileListBox.addView(profileEditor(null), spaced(matchWrap(), 8));
+        }
+        if (addProfileButton != null) {
+            addProfileButton.setText(addingProfile ? "Cancel new network" : "Add network");
+        }
+    }
+
+    private View emptyProfiles() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(rounded(CARD_BG, dp(14), 0, 0));
+        card.setPadding(dp(16), dp(14), dp(16), dp(14));
+
+        TextView title = text(ProfileRow.EMPTY_TITLE, 15, TEXT);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        card.addView(title);
+        TextView detail = text(ProfileRow.EMPTY_DETAIL, 12, MUTED);
+        detail.setLineSpacing(dp(2), 1f);
+        detail.setLayoutParams(spaced(matchWrap(), 4));
+        card.addView(detail);
+        return card;
+    }
+
+    /** One saved network: tap the text block to edit, arrows to set the try order. */
+    private View profileCard(final ProfileRow row) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(rounded(CARD_BG, dp(14), row.active() ? dp(1) : 0,
+                row.active() ? ACCENT : CARD_BG));
+        card.setPadding(dp(14), dp(12), dp(14), dp(12));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+
+        LinearLayout info = new LinearLayout(this);
+        info.setOrientation(LinearLayout.VERTICAL);
+        info.setLayoutParams(new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        info.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                expandedProfileId = row.id().equals(expandedProfileId) ? null : row.id();
+                addingProfile = false;
+                renderProfiles();
+            }
+        });
+
+        LinearLayout title = new LinearLayout(this);
+        title.setOrientation(LinearLayout.HORIZONTAL);
+        title.setGravity(Gravity.CENTER_VERTICAL);
+        TextView name = text(row.position() + ". " + row.ssid(), 16, TEXT);
+        name.setTypeface(Typeface.DEFAULT_BOLD);
+        title.addView(name, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        if (row.active()) {
+            title.addView(pill("ACTIVE", Color.WHITE, ACCENT));
+        }
+        info.addView(title);
+
+        LinearLayout badges = new LinearLayout(this);
+        badges.setOrientation(LinearLayout.HORIZONTAL);
+        badges.setGravity(Gravity.CENTER_VERTICAL);
+        badges.setLayoutParams(spaced(matchWrap(), 6));
+        badges.addView(pill(row.securityBadge(), ACCENT, 0xFFE0E7FF));
+        TextView meta = text(row.summary(), 12, MUTED);
+        meta.setPadding(dp(8), 0, 0, 0);
+        badges.addView(meta, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        info.addView(badges);
+        header.addView(info);
+
+        LinearLayout moves = new LinearLayout(this);
+        moves.setOrientation(LinearLayout.HORIZONTAL);
+        moves.setGravity(Gravity.CENTER_VERTICAL);
+        Button up = compact("↑", "Move " + row.ssid() + " up", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                moveProfile(row.id(), row.position() - 1);
+            }
+        });
+        up.setEnabled(row.canMoveUp());
+        up.setAlpha(row.canMoveUp() ? 1f : 0.35f);
+        Button down = compact("↓", "Move " + row.ssid() + " down", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                moveProfile(row.id(), row.position() + 1);
+            }
+        });
+        down.setEnabled(row.canMoveDown());
+        down.setAlpha(row.canMoveDown() ? 1f : 0.35f);
+        moves.addView(up);
+        moves.addView(down);
+        header.addView(moves);
+
+        card.addView(header);
+        if (row.id().equals(expandedProfileId)) {
+            card.addView(profileEditor(row));
+        }
+        return card;
+    }
+
+    /**
+     * The row's editor. A null row is the new-network editor. The password field
+     * is always empty: its hint says whether one is stored, and an empty value on
+     * Save keeps it. Clearing is only ever the explicit button.
+     */
+    private View profileEditor(final ProfileRow row) {
+        final boolean creating = row == null;
+        final String id = creating ? null : row.id();
+        String ssid = creating ? "" : row.ssid();
+        String security = creating ? ProfileTable.SECURITY_AUTO : row.security();
+
+        LinearLayout editor = new LinearLayout(this);
+        editor.setOrientation(LinearLayout.VERTICAL);
+        editor.setPadding(0, dp(12), 0, 0);
+
+        editor.addView(text("SSID", 12, MUTED));
+        final EditText ssidField = field("SSID", InputType.TYPE_CLASS_TEXT);
+        ssidField.setText(ssid);
+        editor.addView(ssidField, spaced(matchWrap(), 4));
+
+        String hint = creating
+                ? "Password (leave empty for open or OWE)"
+                : row.passwordState().hint();
+        editor.addView(text("Password", 12, MUTED), spaced(matchWrap(), 8));
+        final EditText passField = field(hint,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        passField.setLayoutParams(spaced(matchWrap(), 10));
-        root.addView(passField);
+        editor.addView(passField, spaced(matchWrap(), 4));
+        TextView passNote = text(creating
+                ? "The password is stored encrypted and never shown again."
+                : "Leave empty to keep the saved password. Clearing it is the separate action below.",
+                12, MUTED);
+        passNote.setLineSpacing(dp(2), 1f);
+        passNote.setLayoutParams(spaced(matchWrap(), 4));
+        editor.addView(passNote);
 
-        TextView passHint = text("Used in both modes. Auto-connect registers the network with "
-                + "the saved password; open networks need none.", 12, MUTED);
-        passHint.setLayoutParams(spaced(matchWrap(), 6));
-        passHint.setLineSpacing(dp(2), 1f);
-        root.addView(passHint);
+        editor.addView(text("Security", 12, MUTED), spaced(matchWrap(), 10));
+        final String[] securityChoice = {normalizeSecurity(security)};
+        final Button securityButton = button("Security: "
+                + ProfileRow.securityLabel(securityChoice[0]), null);
+        securityButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                securityChoice[0] = nextSecurity(securityChoice[0]);
+                securityButton.setText("Security: "
+                        + ProfileRow.securityLabel(securityChoice[0]));
+            }
+        });
+        editor.addView(securityButton);
 
-        action(root, "Save SSID and password",
-                "Stores the network name and any newly typed password for both modes. "
-                        + "Auto-connect registers a Wi-Fi suggestion with the saved values; "
-                        + "local-only mode uses them each time you approve a reconnect.",
-                false, new View.OnClickListener() {
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setLayoutParams(spaced(matchWrap(), 10));
+
+        Button save = primary("Save", new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 String typed = passField.getText().toString();
-                // The field starts empty, so an empty field means "keep the
-                // stored passphrase"; only a newly typed value replaces it.
-                ProfileTable.Outcome saved = Profiles.save(MainActivity.this,
-                        ssidField.getText().toString(), null,
-                        typed.isEmpty() ? null : typed);
-                if (!saved.ok()) {
-                    DiagReasons.Failure failure = DiagReasons.profileFailure(saved.error());
-                    Diag.event(MainActivity.this, failure.level(), failure.code(),
-                            "profile save refused: "
-                                    + DiagReasons.profileDetail(saved.error()));
-                    toast("Could not save: " + saved.error());
+                String typedSsid = ssidField.getText().toString();
+                String reply = creating
+                        ? Keeper.addNetwork(MainActivity.this, typedSsid, securityChoice[0],
+                                typed.isEmpty() ? null : typed)
+                        : Keeper.saveProfile(MainActivity.this, id, typedSsid,
+                                securityChoice[0], typed.isEmpty() ? null : typed);
+                if (reply.startsWith("error=")) {
+                    toast("Could not save: " + reply.substring("error=".length()));
                     return;
                 }
-                sendServiceAction(MonitorService.ACTION_RELOAD_LOCAL);
-                ssidField.setText(saved.profile().ssid());
-                passField.setText("");
-                passField.setHint(passphraseHint());
-                toast("Saved: " + saved.profile().ssid());
+                if (creating) {
+                    Profile saved = Profiles.bySsid(MainActivity.this, typedSsid.trim());
+                    expandedProfileId = saved == null ? null : saved.id();
+                    addingProfile = false;
+                }
+                renderProfiles();
                 refreshStatus();
+                toast("Saved: " + typedSsid.trim());
             }
         });
-        return scrollOf(root);
+        save.setLayoutParams(new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        actions.addView(save);
+
+        Button other = creating
+                ? button("Cancel", new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        addingProfile = false;
+                        renderProfiles();
+                    }
+                })
+                : button("Delete", new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        confirmDelete(row);
+                    }
+                });
+        if (!creating) other.setTextColor(BAD);
+        other.setLayoutParams(new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        actions.addView(other);
+        editor.addView(actions);
+
+        if (!creating && row.passwordState() != ProfileRow.Password.NONE) {
+            Button clear = button("Clear saved password", new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    confirmClearPassword(row);
+                }
+            });
+            clear.setTextColor(BAD);
+            editor.addView(clear);
+        }
+        return editor;
+    }
+
+    private void moveProfile(String id, int priority) {
+        String reply = Keeper.setPriority(this, id, String.valueOf(priority));
+        if (reply.startsWith("error=")) {
+            toast("Could not move: " + reply.substring("error=".length()));
+            return;
+        }
+        renderProfiles();
+        refreshStatus();
+    }
+
+    /** Names the network and the password it will discard before removing it. */
+    private void confirmDelete(final ProfileRow row) {
+        new AlertDialog.Builder(this)
+                .setTitle("Delete " + row.ssid() + "?")
+                .setMessage("The saved password for this network will be discarded, along with"
+                        + " its Wi-Fi suggestion and its place in the try order.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Delete", new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface dialog, int which) {
+                        String reply = Keeper.removeProfile(MainActivity.this, row.id());
+                        if (reply.startsWith("error=")) {
+                            toast("Could not delete: "
+                                    + reply.substring("error=".length()));
+                            return;
+                        }
+                        expandedProfileId = row.id().equals(expandedProfileId)
+                                ? null : expandedProfileId;
+                        renderProfiles();
+                        refreshStatus();
+                        toast("Deleted " + row.ssid());
+                    }
+                })
+                .show();
+    }
+
+    /** Clearing a password is explicit, never what an empty Save field means. */
+    private void confirmClearPassword(final ProfileRow row) {
+        new AlertDialog.Builder(this)
+                .setTitle("Clear password for " + row.ssid() + "?")
+                .setMessage("The saved password will be discarded. The network and its"
+                        + " position in the try order stay.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Clear", new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface dialog, int which) {
+                        String reply = Keeper.clearProfilePassword(MainActivity.this, row.id());
+                        if (reply.startsWith("error=")) {
+                            toast("Could not clear: "
+                                    + reply.substring("error=".length()));
+                            return;
+                        }
+                        renderProfiles();
+                        refreshStatus();
+                        toast("Password cleared for " + row.ssid());
+                    }
+                })
+                .show();
     }
 
     private View pageDiagnostics() {
@@ -671,6 +949,11 @@ public class MainActivity extends Activity {
         if (index == PAGE_DIAG) {
             refreshDiag();
         }
+        if (index == PAGE_NETWORK) {
+            // Re-read every time the page is opened: the CLI, a monitor pass or
+            // another screen may have changed the list since it was drawn.
+            renderProfiles();
+        }
     }
 
     @Override
@@ -727,11 +1010,46 @@ public class MainActivity extends Activity {
         return lp;
     }
 
-    /** Whether a passphrase is stored, without putting it back on screen. */
-    private String passphraseHint() {
-        String saved = LocalWifi.passphrase(this);
-        return saved == null || saved.isEmpty()
-                ? "Password" : "Saved - type a new password to replace";
+    /** A small rounded label, used for the security badge and the active tag. */
+    private TextView pill(String label, int textColor, int backgroundColor) {
+        TextView t = text(label, 10, textColor);
+        t.setTypeface(Typeface.DEFAULT_BOLD);
+        t.setBackground(rounded(backgroundColor, dp(6), 0, 0));
+        t.setPadding(dp(7), dp(3), dp(7), dp(3));
+        return t;
+    }
+
+    /** A square arrow button beside a row, with a spoken description. */
+    private Button compact(String label, String description,
+                           View.OnClickListener listener) {
+        Button b = button(label, listener);
+        b.setContentDescription(description);
+        b.setMinWidth(dp(44));
+        b.setMinimumWidth(dp(44));
+        b.setMinHeight(dp(40));
+        b.setMinimumHeight(dp(40));
+        b.setPadding(0, 0, 0, 0);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(44), dp(40));
+        lp.leftMargin = dp(2);
+        b.setLayoutParams(lp);
+        return b;
+    }
+
+    private static String normalizeSecurity(String value) {
+        String clean = value == null ? "" : value.trim().toLowerCase(java.util.Locale.US);
+        for (String allowed : SECURITY_VALUES) {
+            if (allowed.equals(clean)) return clean;
+        }
+        return ProfileTable.SECURITY_AUTO;
+    }
+
+    private static String nextSecurity(String value) {
+        for (int i = 0; i < SECURITY_VALUES.length; i++) {
+            if (SECURITY_VALUES[i].equals(value)) {
+                return SECURITY_VALUES[(i + 1) % SECURITY_VALUES.length];
+            }
+        }
+        return SECURITY_VALUES[0];
     }
 
     private EditText field(String hint, int inputType) {

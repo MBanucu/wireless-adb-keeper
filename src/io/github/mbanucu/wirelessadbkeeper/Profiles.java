@@ -25,6 +25,42 @@ public final class Profiles {
         return table(c).list();
     }
 
+    /**
+     * The Network page's rows, re-read from the store on every call. The
+     * password is only ever turned into a state here, never returned.
+     */
+    public static synchronized List<ProfileRow> rows(Context c) {
+        return ProfileRow.rows(table(c).list(), new ProfileRow.Lookup() {
+            @Override
+            public ProfileRow.Password password(String id) {
+                return passwordState(c, id);
+            }
+
+            @Override
+            public ProfileRow.Suggestion suggestion(String id) {
+                return suggestionState(c, id);
+            }
+        });
+    }
+
+    /** A password's state: saved, absent, or present but undecryptable. */
+    public static synchronized ProfileRow.Password passwordState(Context c, String id) {
+        String value = secret(c, id);
+        if (value == null) return ProfileRow.Password.UNREADABLE;
+        return value.isEmpty() ? ProfileRow.Password.NONE : ProfileRow.Password.SAVED;
+    }
+
+    /**
+     * The last known Android suggestion state for a profile, from its applied
+     * record. An unreadable record is treated as absent, exactly as the
+     * registry does before it rebuilds one.
+     */
+    public static synchronized ProfileRow.Suggestion suggestionState(Context c, String id) {
+        String applied = PassphraseStore.getSecret(c, ProfileTable.appliedSlot(id));
+        return applied != null && !applied.isEmpty()
+                ? ProfileRow.Suggestion.APPLIED : ProfileRow.Suggestion.NONE;
+    }
+
     /** The first profile, which the single-network API reads and applies. */
     public static synchronized Profile active(Context c) {
         return table(c).active();
