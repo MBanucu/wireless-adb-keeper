@@ -211,6 +211,12 @@ public final class Diag {
         fields.add(new DiagSnapshot.Field("last_result",
                 () -> LocalWifi.detail == null || LocalWifi.detail.isEmpty()
                         ? "none" : LocalWifi.detail));
+        fields.add(new DiagSnapshot.Field("wifi_mode", MonitorService::modeSummary));
+        fields.add(new DiagSnapshot.Field("wifi_passphrase", () -> passphraseSummary(c)));
+        fields.add(new DiagSnapshot.Field("suggestion_held", () -> {
+            int count = WifiSuggestion.count(c);
+            return count < 0 ? "unavailable" : String.valueOf(count);
+        }));
         fields.addAll(PermissionAudit.fields(new PermissionAudit.Inputs(
                 c.getPackageName(), Build.VERSION.SDK_INT,
                 Ensurer.hasPermission(c), LocalWifi.hasLocationPermission(c),
@@ -247,6 +253,34 @@ public final class Diag {
     }
 
     // ---------------------------------------------------------------- internals
+
+    /**
+     * Counts the saved passwords by state. Before unlock every read would say
+     * "missing"; that is reported as unavailable instead so the snapshot does
+     * not accuse the user of deleting a password that is only locked.
+     */
+    private static String passphraseSummary(Context c) {
+        if (!unlocked(c)) return "unavailable (before unlock)";
+        List<Profile> profiles = Profiles.list(c);
+        if (profiles.isEmpty()) return "no saved network";
+        int saved = 0;
+        int missing = 0;
+        int unreadable = 0;
+        for (Profile profile : profiles) {
+            switch (Profiles.passwordState(c, profile.id())) {
+                case SAVED:
+                    saved++;
+                    break;
+                case UNREADABLE:
+                    unreadable++;
+                    break;
+                default:
+                    missing++;
+                    break;
+            }
+        }
+        return NetworkRows.passwordSummary(saved, missing, unreadable);
+    }
 
     private static boolean granted(Context c, String name) {
         if (Build.VERSION.SDK_INT < 23) return false;

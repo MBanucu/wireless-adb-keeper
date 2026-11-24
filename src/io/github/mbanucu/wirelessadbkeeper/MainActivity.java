@@ -40,6 +40,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -368,15 +369,22 @@ public class MainActivity extends Activity {
         if (networkAddBox != null) networkAddBox.removeAllViews();
 
         List<Profile> profiles = Profiles.list(this);
-        Set<String> withSecret = new HashSet<>();
+        Map<String, NetworkRows.PasswordState> passwordStates = new LinkedHashMap<>();
+        boolean unreadable = false;
         for (Profile profile : profiles) {
-            if (Profiles.hasSecret(this, profile.id())) withSecret.add(profile.id());
+            NetworkRows.PasswordState state = Profiles.passwordState(this, profile.id());
+            passwordStates.put(profile.id(), state);
+            if (state == NetworkRows.PasswordState.UNREADABLE) unreadable = true;
         }
         Map<String, String> statuses = NetworkRows.parseStatuses(LocalWifi.detail);
-        List<NetworkRows.Row> rows = NetworkRows.rows(profiles, withSecret, statuses);
+        List<NetworkRows.Row> rows = NetworkRows.rows(profiles, passwordStates, statuses);
 
         if (networkSummary != null) {
             String summary = NetworkRows.summary(rows);
+            if (!rows.isEmpty() && unreadable) {
+                summary += " A saved password cannot be decrypted; open that network"
+                        + " and save it again.";
+            }
             networkSummary.setText(rows.isEmpty() ? summary + ". Add one below." : summary);
         }
         if (networkAddButton != null) {
@@ -512,7 +520,11 @@ public class MainActivity extends Activity {
      * with an explicit empty value.
      */
     private View networkEditor(final Profile profile) {
-        final boolean saved = profile != null && Profiles.hasSecret(this, profile.id());
+        NetworkRows.PasswordState saved = profile == null
+                ? NetworkRows.PasswordState.MISSING
+                : Profiles.passwordState(this, profile.id());
+        boolean hasStoredPassword = saved != NetworkRows.PasswordState.MISSING;
+        boolean unreadable = saved == NetworkRows.PasswordState.UNREADABLE;
 
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
@@ -532,8 +544,11 @@ public class MainActivity extends Activity {
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         card.addView(pass, spaced(matchWrap(), 8));
 
-        TextView hint = text("Empty leaves the saved password alone. It is never shown here.",
-                12, MUTED);
+        TextView hint = text(unreadable
+                        ? "The saved password cannot be decrypted. Type it again to save"
+                                + " it; auto-connect cannot use it until you do."
+                        : "Empty leaves the saved password alone. It is never shown here.",
+                12, unreadable ? BAD : MUTED);
         hint.setLineSpacing(dp(2), 1f);
         card.addView(hint, spaced(matchWrap(), 4));
 
@@ -582,7 +597,7 @@ public class MainActivity extends Activity {
         }
         card.addView(buttons, matchWrap());
 
-        if (saved && profile != null) {
+        if (hasStoredPassword && profile != null) {
             card.addView(button("Clear saved password", new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {

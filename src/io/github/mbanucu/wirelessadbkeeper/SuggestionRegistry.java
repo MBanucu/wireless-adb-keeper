@@ -29,11 +29,15 @@ public final class SuggestionRegistry {
     public static final int STATUS_NO_SECRET = -2;
     public static final int STATUS_BUILD_FAILED = -3;
     public static final int STATUS_REQUEST_FAILED = -4;
+    /** Credential-protected storage is not readable yet (before the first unlock). */
+    public static final int STATUS_STORAGE_LOCKED = -5;
 
     /** Why one profile ended up with the status it has. */
     public enum Reason {
         CURRENT,
         ADDED,
+        /** The record matched, but the platform no longer held the suggestion. */
+        READDED,
         ADDED_UNSEALED,
         NO_PASSWORD,
         DECRYPT_FAILED,
@@ -50,6 +54,15 @@ public final class SuggestionRegistry {
         boolean put(String slot, String value);
 
         void clear(String slot);
+
+        /**
+         * True when credential-protected storage cannot be read at all yet.
+         * A caller that sees this must wait for the first unlock instead of
+         * reporting every profile as "no password".
+         */
+        default boolean locked() {
+            return false;
+        }
     }
 
     /** The platform side: one add or remove of one profile's suggestion. */
@@ -62,6 +75,16 @@ public final class SuggestionRegistry {
 
         /** This app's held suggestions; -1 when the version cannot report it. */
         int count();
+
+        /**
+         * The SSIDs this app actually holds, or null when the platform cannot
+         * enumerate them (Android 10). Knowing which ones are held is what
+         * tells a matching applied record apart from a suggestion that was
+         * dropped across a reboot and has to be registered again.
+         */
+        default java.util.Set<String> heldSsids() {
+            return null;
+        }
     }
 
     /** One profile's result: the id names it even when the status is a skip. */
@@ -117,6 +140,7 @@ public final class SuggestionRegistry {
             switch (reason) {
                 case CURRENT:
                 case ADDED:
+                case READDED:
                 case ADDED_UNSEALED:
                     return "active";
                 case NO_PASSWORD:
@@ -151,8 +175,19 @@ public final class SuggestionRegistry {
                     "suggestion: no Wi-Fi service");
         }
 
+        /** Credential-protected storage is locked; retry after the first unlock. */
+        public static Outcome locked() {
+            return new Outcome(new ArrayList<Entry>(), STATUS_STORAGE_LOCKED,
+                    "suggestion: waiting for unlock");
+        }
+
         public boolean ok() {
             return status == STATUS_SUCCESS;
+        }
+
+        /** True when waiting for the first unlock is all that is wrong. */
+        public boolean retryable() {
+            return status == STATUS_STORAGE_LOCKED;
         }
 
         /** The first non-success status, or 0 when every profile registered. */
@@ -186,12 +221,28 @@ public final class SuggestionRegistry {
      * {@link #STATUS_NO_SECRET}; it does not abort the profiles after it. An
      * Android rejection (or a request failure) does abort the pass: repeating
      * it for every profile would only fill the journal and the notification.
+     *
+     * <p>Before the first unlock {@link Secrets#locked()} returns
+     * {@link #STATUS_STORAGE_LOCKED} instead of pretending every profile has no
+     * password. A matching record whose SSID the platform no longer holds is
+     * registered again ({@link Reason#READDED}), which is the reboot repair.
      */
     public Outcome addAll(List<Profile> profiles) {
+        if (secrets.locked()) {
+            // Nothing in credential-protected storage is readable yet. Do not
+            // claim every profile has no password; wait for the first unlock.
+            return Outcome.locked();
+        }
         migrate(profiles);
         List<Entry> entries = new ArrayList<>();
-        int held = manager.count();
-        if (held < 0) held = count(profiles);
+        java.util.Set<String> heldSsids = manager.heldSsids();
+        int held;
+        if (heldSsids != null) {
+            held = heldSsids.size();
+        } else {
+            held = manager.count();
+            if (held < 0) held = count(profiles);
+        }
         int overall = STATUS_SUCCESS;
 
         for (Profile profile : profiles) {
@@ -203,7 +254,9 @@ public final class SuggestionRegistry {
             String applied = secrets.get(slot);
             boolean recordLost = applied == null;
             if (recordLost) {
-                secrets.clear(slot);
+                // Keep the ciphertext: a Keystore that is temporarily unusable
+                // (for example just after a reboot) must not destroy the only
+                // description of the suggestion Android 10 can remove.
                 applied = "";
             }
 
@@ -225,15 +278,32 @@ public final class SuggestionRegistry {
             }
 
             String wanted = SuggestionRecord.encode(ssid, security, secret);
-            if (wanted.equals(applied) && held > 0) {
+            boolean recordMatches = wanted.equals(applied);
+            boolean platformHolds = held > 0
+                    && (heldSsids == null || heldSsids.contains(ssid));
+            if (recordMatches && platformHolds) {
                 entries.add(new Entry(id, ssid, security, Reason.CURRENT,
                         STATUS_SUCCESS, recordLost));
                 continue;
             }
+            // A matching record the platform no longer holds is the reboot
+            // "suggestion missing" case: it has to be registered again, not
+            // reported as current because some other suggestion is held.
+            boolean missing = recordMatches && !platformHolds;
 
             if (!applied.isEmpty()) {
                 SuggestionRecord previous = SuggestionRecord.decode(applied);
-                if (previous != null) manager.remove(id, previous);
+                if (previous != null) {
+                    int removed = manager.remove(id, previous);
+                    if (removed < 0) {
+                        // Keep the record: on Android 10 it is the only object
+                        // that can match the old suggestion for a later retry.
+                        entries.add(new Entry(id, ssid, security, Reason.REQUEST_FAILED,
+                                STATUS_REQUEST_FAILED, recordLost));
+                        overall = STATUS_REQUEST_FAILED;
+                        break;
+                    }
+                }
                 secrets.clear(slot);
             }
 
@@ -245,7 +315,8 @@ public final class SuggestionRegistry {
                     entries.add(new Entry(id, ssid, security, Reason.ADDED_UNSEALED,
                             STATUS_SUCCESS, recordLost));
                 } else {
-                    entries.add(new Entry(id, ssid, security, Reason.ADDED,
+                    entries.add(new Entry(id, ssid, security,
+                            missing ? Reason.READDED : Reason.ADDED,
                             STATUS_SUCCESS, recordLost));
                 }
                 held++;

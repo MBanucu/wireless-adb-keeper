@@ -28,6 +28,8 @@ public final class NetworkRowsTest {
         manyProfilesKeepTheirOrderAndOnlyTheFirstIsActive();
         securityBadgesCoverTheFiveWords();
         passwordStateComesFromTheSecretIds();
+        anUnreadablePasswordIsNotShownAsMissing();
+        passwordSummarySeparatesTheThreeStates();
         suggestionStatusIsParsedPerProfile();
         suggestionStatusWithoutAPassIsDefined();
         summaryNamesTheFirstNetwork();
@@ -129,6 +131,50 @@ public final class NetworkRowsTest {
         check("a stored secret says the field replaces it",
                 "Saved - type a new password to replace",
                 NetworkRows.passwordHint(true));
+    }
+
+    private static void anUnreadablePasswordIsNotShownAsMissing() {
+        Map<String, NetworkRows.PasswordState> states = new LinkedHashMap<>();
+        states.put("p1", NetworkRows.PasswordState.SAVED);
+        states.put("p2", NetworkRows.PasswordState.MISSING);
+        states.put("p3", NetworkRows.PasswordState.UNREADABLE);
+        List<NetworkRows.Row> rows = NetworkRows.rows(
+                profiles(new Profile("p1", "Home", "wpa2"),
+                        new Profile("p2", "Lab", "wpa2"),
+                        new Profile("p3", "Flat", "wpa2")),
+                states, new LinkedHashMap<String, String>());
+
+        check("a saved password reads saved", "password saved",
+                rows.get(0).passwordLabel());
+        check("a missing password reads missing", "no password",
+                rows.get(1).passwordLabel());
+        check("an unreadable password is not called missing",
+                "password unreadable - save it again", rows.get(2).passwordLabel());
+        check("the unreadable state is exposed on the row",
+                NetworkRows.PasswordState.UNREADABLE, rows.get(2).passwordState());
+        check("the row summary carries the failure", true,
+                rows.get(2).summary().contains("password unreadable"));
+        check("an unreadable password has its own hint",
+                "Saved password cannot be decrypted - type it again",
+                NetworkRows.passwordHint(NetworkRows.PasswordState.UNREADABLE));
+        check("a null secret is unreadable, not absent",
+                NetworkRows.PasswordState.UNREADABLE, NetworkRows.passwordState(null));
+        check("an empty secret is missing",
+                NetworkRows.PasswordState.MISSING, NetworkRows.passwordState(""));
+        check("a value is saved",
+                NetworkRows.PasswordState.SAVED, NetworkRows.passwordState("secret"));
+    }
+
+    private static void passwordSummarySeparatesTheThreeStates() {
+        check("a clean store summarizes its counts",
+                "saved=2 missing=0 unreadable=0",
+                NetworkRows.passwordSummary(2, 0, 0));
+        check("an unreadable password carries the fix",
+                "saved=1 missing=0 unreadable=1; save the password again",
+                NetworkRows.passwordSummary(1, 0, 1));
+        check("missing and unreadable are not merged",
+                "saved=0 missing=2 unreadable=1; save the password again",
+                NetworkRows.passwordSummary(0, 2, 1));
     }
 
     private static void suggestionStatusIsParsedPerProfile() {
