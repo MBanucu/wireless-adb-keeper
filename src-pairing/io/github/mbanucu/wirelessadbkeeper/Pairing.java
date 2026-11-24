@@ -1,6 +1,7 @@
 package io.github.mbanucu.wirelessadbkeeper;
 
 import android.content.Context;
+import android.os.Build;
 
 import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
@@ -25,6 +26,7 @@ import io.github.muntashirakon.adb.AdbConnection;
 import io.github.muntashirakon.adb.AdbStream;
 import io.github.muntashirakon.adb.PairingConnectionCtx;
 import io.github.muntashirakon.adb.android.AdbMdns;
+import org.lsposed.hiddenapibypass.HiddenApiBypass;
 
 /**
  * Wireless-debugging pairing, and a check that the pairing took.
@@ -50,8 +52,34 @@ public final class Pairing {
 
     private Pairing() {}
 
+    /**
+     * libadb asks Conscrypt for the TLS exporter through reflection. Android 9
+     * made that a non-SDK method, so pairing gets NoSuchMethodException on a
+     * modern targetSdk. Exempt only that class; everything else stays subject
+     * to the normal hidden-API policy.
+     */
+    private static void allowConscryptExporter() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return;
+        try {
+            HiddenApiBypass.addHiddenApiExemptions(
+                    "Lcom/android/org/conscrypt/Conscrypt;");
+        } catch (Throwable ignored) {
+            // Without the exemption, pair()/verify() report the real failure.
+        }
+    }
+
     /** Pairs with this phone using the code the system dialog is showing. */
     public static String pair(Context context, String rawCode) {
+        return pair(context, rawCode, null, 0);
+    }
+
+    /**
+     * Pairs against an explicit endpoint. Used by the exported pairing screen
+     * when mDNS has gone away because the system dialog is in the background;
+     * the dialog's IP/port is still the authoritative pair endpoint.
+     */
+    public static String pair(Context context, String rawCode, String host, int port) {
+        allowConscryptExporter();
         String code = rawCode == null ? "" : rawCode.replaceAll("\\s", "");
         if (!code.matches("\\d{6}")) {
             Diag.warn(context, "key.pair_invalid_code", "the pairing code is not 6 digits");
@@ -59,9 +87,14 @@ public final class Pairing {
         }
         final AtomicReference<Closeable> live = new AtomicReference<>();
         try {
-            Endpoint endpoint = discover(context, AdbMdns.SERVICE_TYPE_TLS_PAIRING,
-                    "Wireless debugging is not showing a pairing code. Open Developer options, "
-                            + "tap \"Pair device with pairing code\", then try again.");
+            Endpoint endpoint;
+            if (host != null && !host.isEmpty() && port > 0 && port <= 65535) {
+                endpoint = new Endpoint(InetAddress.getByName(host), port);
+            } else {
+                endpoint = discover(context, AdbMdns.SERVICE_TYPE_TLS_PAIRING,
+                        "Wireless debugging is not showing a pairing code. Open Developer options, "
+                                + "tap \"Pair device with pairing code\", then try again.");
+            }
             final PrivateKey privateKey = loadKey(context);
             final X509Certificate certificate = AdbCertificate.loadOrCreate(context);
 
@@ -97,6 +130,7 @@ public final class Pairing {
      * the key that was presented.
      */
     public static String verify(Context context) {
+        allowConscryptExporter();
         final AtomicReference<Closeable> live = new AtomicReference<>();
         try {
             Endpoint endpoint = discover(context, AdbMdns.SERVICE_TYPE_TLS_CONNECT,
@@ -122,8 +156,16 @@ public final class Pairing {
                         byte[] buffer = new byte[256];
                         ByteArrayOutputStream out = new ByteArrayOutputStream();
                         int n;
-                        while ((n = stream.read(buffer, 0, buffer.length)) > 0) {
-                            out.write(buffer, 0, n);
+                        try {
+                            while ((n = stream.read(buffer, 0, buffer.length)) > 0) {
+                                out.write(buffer, 0, n);
+                            }
+                        } catch (IOException e) {
+                            // libadb 3.1.1 throws "Stream closed." when adbd
+                            // closes a finished shell instead of returning -1
+                            // (upstream issue #34). Everything read so far is
+                            // still the command's output.
+                            if (!"Stream closed.".equals(e.getMessage())) throw e;
                         }
                         String reply = new String(out.toByteArray(), Charset.forName("UTF-8")).trim();
                         String text = reply.isEmpty()

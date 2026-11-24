@@ -1,6 +1,7 @@
 package io.github.mbanucu.wirelessadbkeeper;
 
 import android.app.Activity;
+import android.app.ActivityOptions;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -9,6 +10,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
 import android.text.InputType;
+import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -33,11 +35,15 @@ public class PairActivity extends Activity {
     private static final int MUTED = 0xFF6B7280;
     private static final int OK = 0xFF15803D;
     private static final int BAD = 0xFFB91C1C;
+    private static final String TAG = "WirelessAdbKeeper";
 
     private EditText codeField;
     private TextView resultView;
     private Button pairButton;
     private Button verifyButton;
+    private String endpointHost;
+    private int endpointPort;
+    private boolean verifyAfterPair;
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     private int dp(int value) {
@@ -48,8 +54,34 @@ public class PairActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        endpointHost = getIntent().getStringExtra("pair_host");
+        endpointPort = getIntent().getIntExtra("pair_port", 0);
+        final String launchCode = getIntent().getStringExtra("pair_code");
+        final boolean launchVerify = getIntent().getBooleanExtra("pair_verify", false);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         setContentView(buildUi());
+        if (savedInstanceState == null) {
+            if (launchCode != null && !launchCode.isEmpty()) {
+                // Allows the one-time pairing to be driven from adb:
+                // am start ... --es pair_code 123456 --es pair_host <ip> --ei pair_port <port>
+                codeField.setText(launchCode);
+                verifyAfterPair = launchVerify;
+                pairButton.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        pairButton.performClick();
+                    }
+                });
+            } else if (launchVerify) {
+                // am start ... --ez pair_verify true
+                verifyButton.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        verifyButton.performClick();
+                    }
+                });
+            }
+        }
     }
 
     private View buildUi() {
@@ -99,7 +131,8 @@ public class PairActivity extends Activity {
                 run("Pairing...", new Task() {
                     @Override
                     public String run() {
-                        return Pairing.pair(PairActivity.this, codeField.getText().toString());
+                        return Pairing.pair(PairActivity.this, codeField.getText().toString(),
+                                endpointHost, endpointPort);
                     }
                 });
             }
@@ -125,7 +158,12 @@ public class PairActivity extends Activity {
             @Override
             public void onClick(View v) {
                 try {
-                    startActivity(new Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS));
+                    // Keep this screen in the other pane: the pairing dialog
+                    // must stay visible while its code is typed below.
+                    Intent intent = new Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS);
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                            | Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT);
+                    startActivity(intent, ActivityOptions.makeBasic().toBundle());
                 } catch (Exception e) {
                     show("Could not open settings: " + e, BAD);
                 }
@@ -188,6 +226,7 @@ public class PairActivity extends Activity {
                     text = "Pairing failed: " + t;
                 }
                 final String result = text;
+                Log.i(TAG, "pairing result: " + result);
                 handler.post(new Runnable() {
                     @Override
                     public void run() {
@@ -198,6 +237,10 @@ public class PairActivity extends Activity {
                         } finally {
                             pairButton.setEnabled(true);
                             verifyButton.setEnabled(true);
+                        }
+                        if (verifyAfterPair && result.startsWith("Paired")) {
+                            verifyAfterPair = false;
+                            verifyButton.performClick();
                         }
                     }
                 });
