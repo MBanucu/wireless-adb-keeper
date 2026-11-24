@@ -556,10 +556,16 @@ val probeRebootVerdict = tasks.register<Exec>("probeRebootVerdict") {
     commandLine("bash", layout.projectDirectory.file("tools/reboot-verdict-test.sh").asFile.absolutePath)
 }
 
+val probePreunlockConnect = tasks.register<Exec>("probePreunlockConnect") {
+    group = "verification"
+    description = "Checks tools/preunlock-connect.sh with fake avahi/adb and loopback listeners; needs no device."
+    commandLine("bash", layout.projectDirectory.file("tools/preunlock-connect-test.sh").asFile.absolutePath)
+}
+
 val probeScripts = tasks.register<Exec>("probeScripts") {
     group = "verification"
     description = "Checks the scripts' final RESULT line with a fake adb; needs no device."
-    dependsOn(probePairLocal, probeDeviceTooling, probeRebootVerdict)
+    dependsOn(probePairLocal, probeDeviceTooling, probeRebootVerdict, probePreunlockConnect)
     commandLine("bash", layout.projectDirectory.file("tools/result-contract.sh").asFile.absolutePath)
 }
 

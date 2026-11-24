@@ -185,6 +185,24 @@ signature permission is not available to it. To read what the screen shows, run
 if it was off), or `./autostart-allow.sh --check "Wireless ADB Keeper"` for a
 read-only second opinion on an unlocked phone.
 
+### Connect before unlock (host)
+
+adbd answers wireless debugging while the phone is still locked. From the host, without
+USB and without the app:
+
+```bash
+tools/preunlock-connect.sh                  # discover the TLS port and attach
+tools/preunlock-connect.sh --tcpip          # ... then pin 5555 for later
+tools/preunlock-connect.sh --host 192.168.77.232 --no-scan
+```
+
+It reads `_adb-tls-connect._tcp` with `avahi-browse`, falls back to adb-harness's
+`adb-connect` and then the shared `scan_ports.py` range scan, proves each candidate with
+a TCP connect, and attaches with the host's existing key. The last line is
+`RESULT connected=<addr>:<port>` (see the table in
+[docs/preunlock-connect.md](docs/preunlock-connect.md), which also has the systemd/udev
+hook). No new key or secret: pair the host once, then it survives reboots.
+
 ## Requirements
 
 - Android 10+ (network suggestions), tested on Android 15, unrooted.
