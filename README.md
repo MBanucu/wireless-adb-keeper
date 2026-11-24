@@ -105,6 +105,15 @@ samples and cannot be published, so it is the GitHub-handle form instead.
   waits for the new boot, `unlock.sh` clears the keyguard.
 - `autostart-allow.sh` — drives DokeOS's autostart list over adb, because no
   grant reaches it. `--check "Wireless ADB Keeper"` reports without toggling.
+- `keeper.sh autostart` — the fast path to the same row: the app's own
+  accessibility service reads that one window and clicks the switch, about a
+  second or two instead of the ~35 s screen walk. The vendor screen has to be
+  open first (`adb shell am start -n
+  com.blackview.systemmanager/com.freeme.freemanager.autoboot.AutoStartMainActivity`),
+  because Android refuses that activity start from a background app; both
+  `install.sh --autostart` and `autostart-allow.sh` open it. `autostart-allow.sh`
+  also stays as the fallback where the service cannot be enabled, and its
+  `--check` remains the independent read.
 
 ## Reboot and unlock
 
@@ -172,7 +181,9 @@ arrived only **after unlock** and the process started at least 120 s after boot
 (no `boot.received` this boot, an early unlock, or no DokeOS manager); it is
 never a claim that the row is on. The app does not read the vendor list; the
 signature permission is not available to it. To read what the screen shows, run
-`./autostart-allow.sh --check "Wireless ADB Keeper"` on an unlocked phone.
+`./keeper.sh autostart` (it reports `before=`/`after=` and switches the row on
+if it was off), or `./autostart-allow.sh --check "Wireless ADB Keeper"` for a
+read-only second opinion on an unlocked phone.
 
 ## Requirements
 
@@ -446,11 +457,31 @@ which there is no cable to fix it with. Hence the script.
 
 On a DokeOS phone the install also prints the vendor prerequisite from the
 section above. Nothing is toggled by default: `--autostart` is the opt-in, and
-it checks that the phone is `RUNNING_UNLOCKED` first, then runs
-`autostart-allow.sh "Wireless ADB Keeper"` against the same serial. That script
-opens **System Manager → App Management → Auto Start Management**; a failure
-names the expected screen instead of guessing. After the next reboot,
-`./keeper.sh diag | grep oem.autostart` is the check.
+it checks that the phone is `RUNNING_UNLOCKED` first. It then enables the app's
+own accessibility service (`AutostartAccess`, declared in
+`res/xml/autostart_service.xml` with `packageNames="com.blackview.systemmanager"`,
+so it is only ever handed the vendor app's window), opens **System Manager →
+App Management → Auto Start Management** with `am start`, and calls
+`content call --method autostart`, which finds the row and clicks its switch.
+If the service cannot be enabled, the install falls back to
+`autostart-allow.sh "Wireless ADB Keeper"`, which walks the same screen with
+uiautomator. A failure names the expected screen instead of guessing. After the
+next reboot, `./keeper.sh diag | grep oem.autostart` is the check.
+
+With the service enabled, `content call --method autostart` is enough to switch
+the row back on later (idempotent: `before=on after=on` when it already is),
+provided the vendor screen is open; `keeper.sh autostart` is the same call.
+
+A reinstall keeps the service enabled. To turn the capability off again:
+
+```bash
+adb shell settings put secure enabled_accessibility_services ""
+adb shell settings put secure accessibility_enabled 0
+```
+
+(Or toggle it in Settings → Accessibility; the app appears there as *Wireless
+ADB Keeper autostart*. Clearing the setting leaves the other enabled services
+alone only if you edit the list instead of emptying it.)
 
 Both scripts the app runs live in `~/wireless-adb-keeper/`, so copy them there and mark
 them executable:

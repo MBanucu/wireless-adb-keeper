@@ -430,6 +430,9 @@ android {
         // `src-pairing` needs libadb-android, so it is not part of the
         // dependency-free build.sh APK; it only joins the Gradle sources.
         java.directories.addAll(listOf("src", "src-pairing"))
+        // res/ is only the accessibility service metadata; build.sh passes the
+        // same directory to aapt as -S res.
+        res.directories.add("res")
     }
 
     compileOptions {

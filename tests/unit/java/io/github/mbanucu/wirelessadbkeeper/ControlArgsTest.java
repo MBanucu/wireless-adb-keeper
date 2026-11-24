@@ -71,6 +71,15 @@ public final class ControlArgsTest {
         check("profiles is typed PROFILES", ControlArgs.Method.PROFILES,
                 ControlArgs.of("profiles", null, null).method);
 
+        ControlArgs autostart = ControlArgs.of("autostart", null, extras());
+        check("autostart is typed AUTOSTART", ControlArgs.Method.AUTOSTART, autostart.method);
+        check("autostart without a label targets this app", null, autostart.label);
+        check("autostart takes its label from the positional argument", "Custom App",
+                ControlArgs.of("autostart", "Custom App", extras()).label);
+        check("an extras label wins for autostart", "Other App",
+                ControlArgs.of("autostart", "Custom App", extras("label", "Other App")).label);
+        check("a label is not mistaken for an SSID", null, autostart.ssid);
+
         ControlArgs missingSsid = ControlArgs.of("save_wifi", null, extras());
         check("save_wifi without an SSID resolves a null SSID", null, missingSsid.ssid);
         check("save_wifi without an SSID is still the SAVE_WIFI command",

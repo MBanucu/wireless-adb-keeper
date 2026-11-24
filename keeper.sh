@@ -16,6 +16,7 @@
 #   ./keeper.sh pubkey
 #   ./keeper.sh schedule
 #   ./keeper.sh diag    (status snapshot + recent events)
+#   ./keeper.sh autostart [LABEL]  (switch this app's DokeOS autostart row on)
 #
 # The app exposes a content provider for this; `content call` starts the app
 # even when it was force-stopped, and prints the reply synchronously.
@@ -37,7 +38,7 @@ call() {
 }
 
 usage() {
-    sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -62,6 +63,16 @@ case "$command" in
     pubkey)   call --method pubkey ;;
     schedule) call --method schedule ;;
     diag)     call --method diag ;;
+    autostart)
+        # The app's own accessibility service clicks the vendor row; it needs no
+        # screen walk and no adb help, so this is the fast path when the row is
+        # off. The reply says what it saw: result=allowed|blocked, before=, after=.
+        if [ $# -gt 0 ] && [ -n "$1" ]; then
+            call --method autostart --arg "$1"
+        else
+            call --method autostart
+        fi
+        ;;
     start)
         # Android refuses a background app starting its own foreground service,
         # but the shell may start it explicitly.

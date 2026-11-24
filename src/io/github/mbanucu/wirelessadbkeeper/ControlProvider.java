@@ -171,6 +171,11 @@ public class ControlProvider extends ContentProvider {
                 return Diag.report(c);
             case SCHEDULE:
                 return Keeper.schedule(c);
+            case AUTOSTART:
+                // Switches this app's own row in the DokeOS autostart list, so
+                // the boot broadcasts stop waiting for a manual launch. It is
+                // idempotent: an already-allowed row is reported, not clicked.
+                return AutostartSetup.ensureOn(c, args.label);
             default:
                 return "error=unknown method " + args.name;
         }
