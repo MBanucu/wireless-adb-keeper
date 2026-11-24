@@ -73,6 +73,9 @@ trap 'rm -f "$UI_XML"' EXIT
 #   switch <text>        centre of that switch
 #   rows                 every label with a switch, one per line
 hierarchy() {
+    # Drop the previous dump first: a failed dump would otherwise leave an old
+    # hierarchy from another screen, and "ask" would answer from it.
+    d shell rm -f "$DUMP_PATH" >/dev/null 2>&1
     d shell uiautomator dump "$DUMP_PATH" >/dev/null 2>&1
     d shell cat "$DUMP_PATH" 2>/dev/null > "$UI_XML"
 }
@@ -214,8 +217,7 @@ open_screen() {
 
 # Finds the target row, scrolling down and then back up. Sets $state.
 find_row() {
-    local i
-    for i in 1 2 3 4 5 6 7 8; do
+    for _ in 1 2 3 4 5 6 7 8; do
         hierarchy
         if state=$(ask state "$TARGET" 2>/dev/null); then
             return 0
@@ -223,7 +225,7 @@ find_row() {
         scroll_down
         sleep 1
     done
-    for i in 1 2 3 4 5 6 7 8; do
+    for _ in 1 2 3 4 5 6 7 8; do
         hierarchy
         if state=$(ask state "$TARGET" 2>/dev/null); then
             return 0
