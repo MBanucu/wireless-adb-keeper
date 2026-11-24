@@ -52,6 +52,18 @@ if [ "$saved_ssid" != "$ssid" ]; then
     exit 3
 fi
 
+# A provider call starts the app but not its foreground service. The redaction
+# suite force-stops the app while removing its temp profile, so by the time this
+# suite runs the monitor can be stopped; a revision bump is then never observed
+# and the suggestion is never added. Start it here, before changing anything.
+if [ "$(keeper status | field service)" != running ]; then
+    keeper start >/dev/null 2>&1 || true
+    if ! wait_for_service 20; then
+        echo "cannot run wifi: the monitor service did not start" >&2
+        exit 1
+    fi
+fi
+
 profiles=$(keeper profiles)
 if printf '%s\n' "$profiles" | grep -F "ssid=$ssid " | grep -q 'passphrase=set'; then
     echo "skip wifi: $ssid already has a stored passphrase; use a profile without one" >&2
@@ -106,7 +118,11 @@ keeper mode auto >/dev/null
 deadline=$(( $(date +%s) + 20 ))
 last_result=
 while :; do
-    last_result=$(keeper status | field last_result)
+    if ! status=$(keeper status); then
+        echo "cannot read keeper status while waiting for the suggestion" >&2
+        exit 1
+    fi
+    last_result=$(printf '%s\n' "$status" | field last_result)
     case $last_result in
         *"suggestion $profile_id: active"*) break ;;
     esac
