@@ -25,7 +25,8 @@ Neither half can be solved by the app alone:
 
 ## Components
 
-**App (`src/`)** — `io.github.mbanucu.wirelessadbkeeper`, targetSdk 35, built on device.
+**App (`src/`)** — `io.github.mbanucu.wirelessadbkeeper`, targetSdk 35, compiled by
+both the canonical Gradle build and the on-device bootstrap.
 The name says whose app it is: `com.example` is the placeholder the docs reserve for
 samples and cannot be published, so it is the GitHub-handle form instead.
 
@@ -125,16 +126,35 @@ unlock; unlocking is then only needed for the laptop's own uplink.
 ## Requirements
 
 - Android 10+ (network suggestions), tested on Android 15, unrooted.
-- On-device build tools: `openjdk-17`, `aapt`, `d8`, `apksigner` (Termux `aapt`,
-  `apksigner` and `android-sdk`-style `d8` packages), plus an `android.jar`.
+- Bootstrap APK (`build.sh`): `openjdk-17`, `aapt`, `d8`, `apksigner` (Termux
+  `aapt`, `apksigner` and `android-sdk`-style `d8` packages), plus an
+  `android.jar`.
+- Canonical APK (`tools/termux-build.sh`): JDK 17+, Android SDK platform 35, and
+  Termux's bionic `aapt2` (`pkg install aapt`). The wrapper pins Gradle 9.9.2
+  and AGP 9.5.2.
 - For the watchdog: `python3`, `zeroconf` (optional), `termux-wake-lock`
   (Termux:API not required for the lock itself; the `termux-wake-lock` binary ships
   with Termux).
 
 ## Build
 
+There are two builds, and the difference is a contract, not an accident:
+
+| build | command | APK | feature set | needs |
+| --- | --- | --- | --- | --- |
+| **Gradle (canonical)** | `tools/termux-build.sh` | `build-gradle/outputs/apk/debug/wireless-adb-keeper-debug.apk` | Termux path **and** pairing (`src-pairing`, `libadb-android`) | JDK 17+, Android SDK 35, Termux `aapt2` |
+| bootstrap | `./build.sh` | `wifidebug.apk` | Termux path only: no dependency, no native library, no pairing | `javac`, `d8`, `aapt`, `apksigner`, an `android.jar` |
+
+Gradle is canonical because it is the complete app. `build.sh` remains the
+dependency-free bootstrap: it must keep working with no network, no Gradle and
+no SDK configuration, which is what a phone-only setup can rely on. Neither
+silently becomes the other; [`docs/termux-build.md`](docs/termux-build.md)
+records the full contract and the measured builds.
+
+### Bootstrap (no Gradle)
+
 ```bash
-# put android.jar (API 28+ platform jar) next to build.sh
+# put android.jar (API 28+ platform jar) next to build.sh, or point ANDROID_JAR at it
 ./build.sh          # compiles, dexes, signs with a generated debug keystore
 ```
 
@@ -144,32 +164,64 @@ The script creates `debug.keystore` on first run and signs `wifidebug.apk`. If
 `d8 --min-api`: the script reads `android:minSdkVersion` from it instead of
 hardcoding an API level, so a `minSdk` bump cannot leave the dex behind.
 
-Updating an installed copy needs the **same signing key**: pass `--ks` to
-`apksigner` with the key the installed build was signed with, or Android refuses the
-update as a signature mismatch (an uninstall also clears the app's saved settings).
-
-### Gradle
-
-`build.sh` remains the on-phone build. The Gradle build exists for what it is
-better at: declaring a dependency instead of hand-dexing it, and importing the
-tree into an IDE.
+### Canonical Gradle build
 
 ```bash
-./gradlew assembleDebug     # build-gradle/outputs/apk/debug/
+tools/termux-build.sh                 # checkBuildEnv + assembleDebug, offline by default
+OFFLINE=0 tools/termux-build.sh       # first run, allows the downloads
+tools/termux-build.sh lintDebug       # any Gradle task, same environment
+tools/termux-build.sh --check         # print the resolved SDK and aapt2 only
+```
+
+The wrapper resolves the SDK from `ANDROID_HOME`, `ANDROID_SDK_ROOT`,
+`local.properties` or `$HOME/android-sdk`, exports it for the Gradle process,
+and passes Termux's bionic `aapt2` as `android.aapt2FromMavenOverride`. A fresh
+checkout therefore needs one command; `local.properties.example` is the
+template if you prefer to pin `sdk.dir` instead. The same tasks by hand:
+
+```bash
+export ANDROID_HOME="$HOME/android-sdk"
+./gradlew --offline checkBuildEnv probe lintDebug assembleDebug
 ```
 
 It builds the same `src/` and the same root `AndroidManifest.xml`, which stays
 canonical for `build.sh`, plus the dependency-using `src-pairing/` (see
-[Pairing](#pairing)). The package name, `versionCode`, `versionName`,
-`minSdk` and `targetSdk` are read from that manifest, so the two builds cannot
-disagree; Gradle stages a copy under `build-gradle/` with the attributes AGP owns
-removed. Output goes to `build-gradle/` because `build.sh` owns `build/`.
+[Pairing](#pairing)). The package name, `versionCode`, `versionName`, `minSdk`
+and `targetSdk` are read from that manifest, so the two builds cannot disagree.
+Gradle stages a copy under `build-gradle/` with the attributes AGP owns removed;
+the staging is a DOM transformation, and `checkStagedManifest` fails the build if
+the result loses an activity, a permission or the control provider. Output goes
+to `build-gradle/` because `build.sh` owns `build/`.
 
-`local.properties` (gitignored) points at the SDK; on this device AGP also needs
-`android.aapt2FromMavenOverride` in `~/.gradle/gradle.properties`, since the
-`aapt2` AGP ships is x86_64. The Gradle debug APK is signed with the SDK's
-`~/.android/debug.keystore`, not the `debug.keystore` `build.sh` creates, so it
-will not update an installed `build.sh` build.
+The two APKs use different debug keys: the Gradle APK is signed with the SDK's
+`~/.android/debug.keystore`, not the `debug.keystore` `build.sh` creates. One
+cannot update the other.
+
+### Dependency policy
+
+`gradle/libs.versions.toml` owns AGP, `compileSdk` and `libadb-android`; the
+version is no longer a string in `build.gradle.kts`. The dependency is a
+JitPack artifact, so the build pins it twice:
+
+- `gradle/verification-metadata.xml` carries a SHA-256 for every artifact,
+  including `libadb-android` and its `spake2` transitive. A re-published JitPack
+  artifact fails the build instead of entering it unnoticed.
+- `tools/vendor-libadb.sh` copies those artifacts into `gradle/vendor/`, a
+  project-controlled Maven repository that `settings.gradle.kts` consults first.
+  It refuses bytes that do not match the verification metadata.
+
+```bash
+./gradlew checkDependencyPolicy    # the version has a checksum entry
+tools/vendor-libadb.sh --check     # verify a vendored tree, if one exists
+```
+
+JitPack stays the source until someone vendors the artifacts. If JitPack is
+unavailable, the fallbacks are, in order: the vendored tree, a controlled mirror
+serving the same coordinates, or the dependency-free `build.sh` APK (pairing
+excluded). [`docs/termux-build.md`](docs/termux-build.md#dependencies) has the
+exact commands and the mirror procedure. Offline builds are unchanged:
+`--offline` still resolves from the Gradle cache, and the wrapper checksum is in
+`gradle/wrapper/gradle-wrapper.properties`.
 
 ### Probes and CI
 
@@ -179,10 +231,11 @@ app's `android.jar`, so neither needs a hand-written `javac` line:
 
 ```bash
 ./gradlew probeUnit   # the tests/unit suites, no device, no JUnit
-./gradlew probe       # probeUnit plus TokenProbe, ResultProbe and the scripts
+./gradlew probe       # probeUnit, build/manifest checks and the host probes
 ./gradlew probeResult # TermuxResult: the RESULT-line parser, no device
 ./gradlew probeScripts # the scripts and tests/device.sh with a fake adb
 ./gradlew probeDeviceTooling # tests/device.sh: flags, recording, artifacts, restore
+./gradlew probeBuildTooling # wrapper hash guard and the Termux script's env handling
 ./gradlew probeAdb    # AdbProbe: needs a phone with adbd on 127.0.0.1:5555
 ./gradlew probeAdb -PadbKey=$HOME/.android/adbkey -PadbPort=5555 -PadbPinPort=5555
 ./gradlew probeAdb -PadbTcpip=true   # also sends `tcpip:5555` and times the re-pin
@@ -201,20 +254,26 @@ dependency: it does not resolve from the offline Gradle cache this project build
 from on the phone, so `tests/unit.sh` runs the suites itself and reports
 `PASS`/`FAIL` with a non-zero exit code.
 
-`.github/workflows/build.yml` runs `./gradlew test lint assembleDebug` on every
-push and pull request, on JDK 17 with the Android SDK. It needs no device, and it
-does not run `build.sh`, which remains the on-phone path.
+`.github/workflows/build.yml` runs `./gradlew checkBuildEnv probe lintDebug
+assembleDebug` on every push and pull request, on JDK 17 with the Android SDK.
+It validates the wrapper JAR (`gradle/actions/wrapper-validation`) and the
+distribution SHA-256 (`tools/check-wrapper.sh --online`). It needs no device.
+A second, opt-in `termux` job runs `tools/termux-build.sh` and `build.sh` on a
+self-hosted phone runner; it is skipped until `TERMUX_RUNNER_ENABLED=true` and a
+runner labelled `self-hosted, termux` is registered. See
+[`docs/termux-build.md`](docs/termux-build.md#ci-and-the-on-device-job).
 
 ### Pairing
 
 Wireless-debugging pairing is the only thing in the app that needs a library.
 It is SPAKE2 plus a certificate exchange, so it uses `libadb-android` and lives
-in `src-pairing/`, a source directory only Gradle compiles. `build.sh` still
-sees `src/` alone: its APK has no dependency, no native library, and no pairing
-screen, and the extra `<activity>` for the pairing screen is injected into the
-staged manifest by `build.gradle.kts` rather than into the canonical one.
+in `src-pairing/`, a source directory only the canonical Gradle build compiles.
+`build.sh` still sees `src/` alone: its APK has no dependency, no native library,
+and no pairing screen. The extra `<activity>` for the pairing screen is added to
+the staged manifest by a DOM transformation, not to the canonical manifest, and
+`checkStagedManifest` verifies it is there.
 
-The one-time setup, for the Gradle build only:
+The one-time setup, for the canonical Gradle build only:
 
 1. Open the app → **Help** → **Pair this phone**.
 2. In Developer options, open **Wireless debugging** → **Pair device with
@@ -304,16 +363,20 @@ The script is written so that the last three are discovered rather than assumed.
 PHONE_SERIAL=192.168.77.232:5555 ./install.sh     # or just ./install.sh
 ```
 
-With no argument, `install.sh` installs `wifidebug.apk` in the repo root, the
-file `./build.sh` signs. Pass a path to install something else; the Gradle build
-is signed with a different key, so it cannot update an app installed by
-`build.sh`.
+With no argument, `install.sh` prefers the canonical Gradle APK at
+`build-gradle/outputs/apk/debug/wireless-adb-keeper-debug.apk` (the one `tools/termux-build.sh`
+builds, with pairing). If that file is absent it falls back to `wifidebug.apk`,
+the dependency-free bootstrap APK `./build.sh` signs. Pass a path to install
+something else. The two are signed with different keys, so installing one over
+the other requires an uninstall first (which also clears the app's saved
+settings).
 
 `install.sh` does the install and then the four grants, because a reinstall
 silently drops them:
 
 ```bash
-adb install -r wifidebug.apk
+adb install -r build-gradle/outputs/apk/debug/wireless-adb-keeper-debug.apk
+# ... or `adb install -r wifidebug.apk` for the dependency-free bootstrap APK
 adb shell pm grant io.github.mbanucu.wirelessadbkeeper android.permission.WRITE_SECURE_SETTINGS
 adb shell pm grant io.github.mbanucu.wirelessadbkeeper android.permission.ACCESS_FINE_LOCATION
 adb shell pm grant io.github.mbanucu.wirelessadbkeeper android.permission.POST_NOTIFICATIONS

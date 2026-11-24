@@ -1,9 +1,15 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # install.sh -- install the app and hand it the grants it cannot ask for.
 #
-#   ./install.sh                      # wifidebug.apk (from ./build.sh), first device
+#   ./install.sh                      # canonical Gradle APK, else wifidebug.apk
 #   ./install.sh path/to/app.apk
 #   PHONE_SERIAL=192.168.77.232:5555 ./install.sh
+#
+# With no argument the canonical build wins: the Gradle debug APK at
+# build-gradle/outputs/apk/debug/wireless-adb-keeper-debug.apk, which includes pairing. If that
+# file is absent, the dependency-free bootstrap APK ./build.sh signs is used
+# instead (wifidebug.apk). The two are signed with different keys, so installing
+# one over the other requires an uninstall first.
 #
 # A reinstall loses every `pm grant`: POST_NOTIFICATIONS and
 # ACCESS_FINE_LOCATION come back ungranted, WRITE_SECURE_SETTINGS and
@@ -14,11 +20,28 @@
 # nobody re-reads.
 set -uo pipefail
 
-APK=${1:-wifidebug.apk}
+APK=${1:-}
 SERIAL=${PHONE_SERIAL:-}
 PKG=io.github.mbanucu.wirelessadbkeeper
 
-[ -f "$APK" ] || { echo "no APK at $APK; run ./build.sh first, or pass the APK path" >&2; exit 1; }
+if [ -z "$APK" ]; then
+    for candidate in \
+        build-gradle/outputs/apk/debug/wireless-adb-keeper-debug.apk \
+        wifidebug.apk \
+        ; do
+        if [ -f "$candidate" ]; then
+            APK=$candidate
+            break
+        fi
+    done
+fi
+
+[ -n "$APK" ] || {
+    echo "no APK found; run tools/termux-build.sh (canonical) or ./build.sh (bootstrap), or pass the APK path" >&2
+    exit 1
+}
+[ -f "$APK" ] || { echo "no APK at $APK; pass a path to an existing APK" >&2; exit 1; }
+echo "installing $APK"
 
 pick_serial() {
     [ -n "$SERIAL" ] && return 0

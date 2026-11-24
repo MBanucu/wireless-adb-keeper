@@ -1,0 +1,32 @@
+# The single source of truth for the Gradle build's versions.
+#
+# build.sh deliberately reads nothing from here: it is the dependency-free
+# bootstrap and must keep working with javac/d8/aapt alone. The Android package,
+# versionCode, versionName, minSdk and targetSdk still come from the canonical
+# AndroidManifest.xml, which both builds read, so this file owns only what
+# Gradle adds on top of that: AGP, the compile SDK and the one runtime
+# dependency.
+#
+# docs/termux-build.md explains the dependency policy and the JitPack fallback.
+
+[versions]
+# AGP 9.x is the line that runs on Gradle 9.6+, which is what Termux packages
+# (9.9.2 at the time of writing). Pin the pair together.
+agp = "9.5.2"
+
+# Platform the app compiles against. build.sh gets its android.jar from the SDK
+# or from ANDROID_JAR; this value is what Gradle asks the SDK for.
+compileSdk = "35"
+
+# libadb-android is published by JitPack, not Maven Central. The exact version
+# and the SHA-256 in gradle/verification-metadata.xml are the pin; see
+# docs/termux-build.md before changing either.
+libadb = "3.1.1"
+
+[libraries]
+# Pairing (SPAKE2 + TLS) only; build.sh never sees this and its APK has no
+# dependency, no native library and no pairing screen.
+libadb-android = { module = "com.github.MuntashirAkon:libadb-android", version.ref = "libadb" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
