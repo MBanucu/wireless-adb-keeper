@@ -547,10 +547,16 @@ val probeDeviceTooling = tasks.register<Exec>("probeDeviceTooling") {
     commandLine("bash", layout.projectDirectory.file("tools/device-tooling-test.sh").asFile.absolutePath)
 }
 
+val probeRebootVerdict = tasks.register<Exec>("probeRebootVerdict") {
+    group = "verification"
+    description = "Checks tools/reboot-verdict.sh with pre/post reboot fixtures; needs no device."
+    commandLine("bash", layout.projectDirectory.file("tools/reboot-verdict-test.sh").asFile.absolutePath)
+}
+
 val probeScripts = tasks.register<Exec>("probeScripts") {
     group = "verification"
     description = "Checks the scripts' final RESULT line with a fake adb; needs no device."
-    dependsOn(probePairLocal, probeDeviceTooling)
+    dependsOn(probePairLocal, probeDeviceTooling, probeRebootVerdict)
     commandLine("bash", layout.projectDirectory.file("tools/result-contract.sh").asFile.absolutePath)
 }
 

@@ -113,6 +113,16 @@ samples and cannot be published, so it is the GitHub-handle form instead.
 PHONE_PIN=1234 ../phone-link-tools/unlock.sh    # or take the PIN from the env
 ```
 
+To leave evidence across the reboot, even if the shell that starts it dies:
+
+```bash
+tools/reboot-verdict.sh record    # before the reboot
+tools/reboot-verdict.sh check     # after it, once unlocked
+```
+
+`check` compares `boot_id`, the diagnostics snapshot and the journal's newest
+`boot.received` section. See [`docs/reboot-verdict.md`](docs/reboot-verdict.md).
+
 Boot completion is waited for with **one** adb round trip: the polling loop runs on
  the phone (`while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 0.1; done`),
 so the cost is 100 ms granularity rather than an adb call per tick. After that the
