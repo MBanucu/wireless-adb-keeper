@@ -54,19 +54,34 @@ snapshot_value() {
     ' "$1"
 }
 
-journal_lines() {
-    awk 'found { print } index($0, "-- journal (oldest first) --") == 1 { found = 1 }' "$1"
-}
-
-after_last_boot() {
-    # The journal is oldest first. Start at the last boot.received so evidence
-    # from the previous boot, and from the app's earlier life, is ignored.
-    awk '
-        / boot\.received / { last = NR }
-        { line[NR] = $0 }
+boot_section() {
+    # boot_section <diag-file> <recorded-at>
+    #
+    # Print the current boot's journal lines. The diagnostics contain the live
+    # journal, then a "-- previous ... --" section with older events; that
+    # section is dropped so a stale failure cannot fail a fresh boot.
+    #
+    # A boot logs LOCKED_BOOT_COMPLETED, then svc.start/svc.mode, then
+    # BOOT_COMPLETED. Anchor on the first boot.received at/after the record,
+    # not the last one, so the service lines between the pair are included.
+    # If the clock moved backwards, fall back to the last LOCKED_BOOT_COMPLETED
+    # (or the last boot.received) so the section still contains svc.start.
+    awk -v since="$2" '
+        index($0, "-- journal (oldest first) --") == 1 { live = 1; next }
+        live && /^-- previous / { exit }
+        !live { next }
+        {
+            line[NR] = $0
+            if ($0 ~ / boot\.received /) {
+                last = NR
+                if (index($0, "LOCKED_BOOT_COMPLETED")) last_locked = NR
+                if (!started && substr($0, 1, 20) >= since) started = NR
+            }
+        }
         END {
-            if (last == 0) exit 1
-            for (i = last; i <= NR; i++) print line[i]
+            if (!started) started = last_locked ? last_locked : last
+            if (!started) exit 1
+            for (i = started; i <= NR; i++) if (i in line) print line[i]
         }
     ' "$1"
 }
@@ -254,7 +269,7 @@ check() {
 
     if [ "$new_boot" != 1 ]; then
         warn "the post-boot journal was checked" "skipped: no new boot"
-    elif after_boot_lines=$(after_last_boot "$tmp"); then
+    elif after_boot_lines=$(boot_section "$tmp" "$(state_value recorded_at)"); then
         ok "the journal has a post-boot section"
     else
         bad "the journal has a post-boot section" "no boot.received line"

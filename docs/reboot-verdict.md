@@ -35,12 +35,15 @@ holds an SSID, passphrase, token or pairing code.
 - `wifi_passphrase` has no `missing` or `unreadable` profiles.
 - In auto-connect mode, a suggestion is held.
 - `port_5555` says `listening`.
-- The newest `boot.received` section in the journal contains:
+- The current boot's journal section — from the first `boot.received` at or
+  after the recorded time through the end of the live journal; the appended
+  previous-install section is ignored — contains:
   - `svc.start`,
   - `svc.mode` matching the saved mode,
   - `pin.state listening`,
   - an active suggestion (`status 0`) or `wifi.suggest.added`/`wifi.suggest.job`.
-- No boot-critical failure appears after that `boot.received`:
+- No boot-critical failure appears after that boot marker — and nothing from
+  the previous-install journal section counts. Codes:
   `svc.start_failed`, `svc.start_refused`, `pin.script_failed`,
   `pin.run_refused`, `pin.port_closed`, `wifi.suggest.decrypt_failed`,
   `wifi.suggest.no_password`, `wifi.suggest.build_failed`,
@@ -73,6 +76,10 @@ tools/reboot-verdict.sh check --json
 
 - The journal is a 200-line ring. Check soon after boot and leave verbose
   logging off unless the extra detail is needed.
+- Selection is wall-clock based: the first `boot.received` at/after the
+  recorded time starts the section. If the clock jumps backwards, the tool
+  falls back to the last `LOCKED_BOOT_COMPLETED`; a boot with neither marker
+  fails the section check.
 - The verdict proves the app's side: boot receiver, service, mode, suggestion,
   pin probe and journal. It does not prove the laptop's Wi-Fi path or a remote
   `adb connect`; test that separately when the phone is reachable.
