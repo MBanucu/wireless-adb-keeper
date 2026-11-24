@@ -152,8 +152,8 @@ for the device-protected storage entry points, which the suites never call.
 They need the jar to compile, like the app itself; the suites over pure classes
 (`DiagFormat`, `DiagJournal`, `DiagRetention`, `DiagRotation`, `DiagSnapshot`,
 `DiagReasons`, `PermissionAudit`, `SuggestionRecord`, `SuggestionRegistry`,
-`ProfileTable`, `Backoff`, `EnsureDecision`, `ControlArgs`, `Base64Codec`,
-`Provider`, `TermuxResult`, `VerboseLog`) do not.
+`ProfileTable`, `NetworkRows`, `Backoff`, `EnsureDecision`, `ControlArgs`,
+`Base64Codec`, `Provider`, `TermuxResult`, `VerboseLog`) do not.
 
 ## The device suite
 

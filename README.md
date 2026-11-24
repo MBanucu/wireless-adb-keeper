@@ -48,6 +48,9 @@ samples and cannot be published, so it is the GitHub-handle form instead.
   the encrypted `PassphraseStore`, under `profile.<id>`. The first read of an upgraded
   install turns the old single SSID and passphrase into `default`, so nothing has to be
   retyped. The list is also available from adb/Termux through `keeper.sh profiles`.
+- `NetworkRows` — the Network page without Android types: one row per profile in try
+  order with its security badge, password state, last suggestion status and the active
+  marker, plus the summary and delete-confirmation text.
 - `ControlProvider` — the adb command surface: the same actions the buttons run,
   reachable with `adb shell content call` and readable through `keeper.sh`.
   `ControlReceiver` is the same dispatch over an ordered broadcast, the only
@@ -340,9 +343,11 @@ Termux 0.109+ sends the script's exit code, stdout and stderr back, so a missing
 helper now shows its own error under **Pin result** and in the journal; older
 Termux still only sees the port stay closed (#37).
 
-Open the app, enter the Wi-Fi SSID and password (both modes need it; open networks need
-none), tap **Save**, then **Connect now** and approve the "available networks"
-notification once. Leave **Connect mode** on `auto-connect`.
+Open the app, add the Wi-Fi network on the **Network** page (both modes need it; open
+networks need no password), tap **Save**, then **Connect now** and approve the
+"available networks" notification once. Leave **Connect mode** on `auto-connect`. Add
+more networks there to keep several saved; tap a row to edit or delete it, and the
+up/down controls set the try order (the first row is marked active).
 
 ## Control from adb
 
