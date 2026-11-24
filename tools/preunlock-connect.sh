@@ -349,6 +349,9 @@ if [ -n "$TCPIP_PORT" ]; then
     host=${CONNECTED%:*}
     adb disconnect "$CONNECTED" >/dev/null 2>&1
     target="$host:$TCPIP_PORT"
+    # A serial adb remembers as offline can make `adb connect` a no-op. Clear
+    # the pinned serial too, as attempt() does, before the retry loop.
+    adb disconnect "$target" >/dev/null 2>&1
     for _ in 1 2 3 4 5; do
         [ "$(device_state "$target")" = device ] && break
         timeout 5 adb connect "$target" >/dev/null 2>&1

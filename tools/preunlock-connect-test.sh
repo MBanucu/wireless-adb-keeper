@@ -120,6 +120,9 @@ case "${1:-}" in
         if [ -f "$state/connected" ]; then
             printf '%s\tdevice\n' "$(cat "$state/connected")"
         fi
+        if [ -f "$state/offline" ]; then
+            printf '%s\toffline\n' "$(cat "$state/offline")"
+        fi
         ;;
     connect)
         hostport=${2:-}
@@ -128,6 +131,10 @@ case "${1:-}" in
             rm -f "$state/connect_fail_once"
             echo "failed to connect to '$hostport': Connection refused" >&2
             exit 1
+        fi
+        if [ -f "$state/offline" ] && [ "$(cat "$state/offline")" = "$hostport" ]; then
+            echo "already connected to $hostport"
+            exit 0
         fi
         if grep -qx "$port" "$state/ports" 2>/dev/null; then
             printf '%s\n' "$hostport" > "$state/connected"
@@ -138,6 +145,10 @@ case "${1:-}" in
         exit 1
         ;;
     disconnect)
+        serial=${2:-}
+        if [ -f "$state/offline" ] && [ "$(cat "$state/offline")" = "$serial" ]; then
+            rm -f "$state/offline"
+        fi
         rm -f "$state/connected"
         ;;
 esac
@@ -291,6 +302,24 @@ if logged "^tcpip 127\\.0\\.0\\.1:$tls $pinned$" &&
     check "tcpip ran on the TLS serial and reconnected" 1
 else
     check "tcpip ran on the TLS serial and reconnected" 0
+fi
+
+# 5b. adb still remembers the pinned serial offline after an earlier run.
+# `adb connect` is a no-op for that serial, so tcpip's reconnect must clear
+# it first, the same way attempt() does before its retry loop.
+state
+tls=$(start_listener tls_offline)
+pinned=$(start_listener pinned_offline)
+printf '%s\n' "$tls" >> "$WORK/state/ports"
+avahi_fixture 127.0.0.1 "$tls"
+printf '127.0.0.1:%s\n' "$pinned" > "$WORK/state/offline"
+run_case "tcpip clears a remembered offline serial" 0 \
+    "RESULT connected=127.0.0.1:$pinned tcpip=$pinned" \
+    --host 127.0.0.1 --no-scan --tcpip "$pinned"
+if logged "^disconnect 127\\.0\\.0\\.1:$pinned$"; then
+    check "tcpip disconnected the remembered offline target" 1
+else
+    check "tcpip disconnected the remembered offline target" 0
 fi
 
 # 6. tcpip refused by adbd: reported, not swallowed.
