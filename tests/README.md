@@ -171,14 +171,31 @@ bash tests/device.sh --serial 127.0.0.1:5555
 bash tests/device.sh --record        # optional adb-harness video and events
 bash tests/device.sh --connect       # opt in to setup auto-reconnect
 bash tests/device.sh --restore       # put back a dead run's state
-bash tests/device.sh --slow          # add cap.sh (210 mode changes)
+bash tests/device.sh --slow          # add cap.sh (210 mode changes, in parallel)
 bash tests/device.sh --allow-reboot  # opt in to the #39 reboot in recovery.sh
+DEVICE_WIFI_SSID=WP22 DEVICE_WIFI_PASSPHRASE=... \
+    bash tests/device.sh --only wifi # opt-in real-network check
 ```
 
 The flags follow `android-accessible-terminal/samples/e2e.sh`: `--list`,
 `--only` (a name, a comma list or a space list), `--quiet`, `--restore`, and
 `--serial`, which is passed through every adb call. `--slow` and
 `--allow-reboot` keep their old meaning. `--record` is the only tier-2 flag.
+
+The `wifi` suite is skipped in the default run because it needs a real
+credential. Set `DEVICE_WIFI_PASSPHRASE` (and optionally `DEVICE_WIFI_SSID`,
+default `WP22`) and select it explicitly. It stores the password through the
+provider, proves auto-connect reports `suggestion <id>: active`, and proves the
+password is absent from the profile list, SharedPreferences and the diag
+report. Its cleanup clears the password, removes the suggestion and restores
+the previous mode; a failed assertion reports that the secret was found without
+printing it. The value is never committed.
+
+The slow `cap` suite is the one long default check. Each host-side `keeper`
+call starts a new adb shell and `content` process (about 1.1 s), so 210 calls
+used to take about 229 s. The calls are now issued in two device-side parallel
+batches, followed by one sequential write to make the newest event
+(`auto-connect`) deterministic; the same assertions take about 17 s.
 
 ### The three tiers
 
