@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.SystemClock;
+import android.os.UserManager;
 import android.util.Log;
 
 import java.net.InetAddress;
@@ -17,13 +18,15 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Keeps adbd listening on a fixed TCP port, so `adb connect <phone>:5555` keeps
  * working across adbd restarts.
  *
- * The app cannot do this by itself. `adb tcpip 5555` is an adb service request,
- * so it needs both an adb client and a key adbd accepts; an app has neither, and
- * the property it sets (`service.adb.tcp.port`) is refused to `setprop` from the
- * shell user. Termux on the same phone has an adb client whose key is already
- * paired, so the app's part is to notice that the port is gone and ask Termux to
- * run the script that sends `tcpip:5555`. Every decision — when to ask, how
- * often, whether Termux can be used at all — stays here.
+ * The app cannot do this by itself yet. `adb tcpip 5555` is an adb service
+     * request, so it needs both an adb client and a key adbd accepts; an app has
+     * neither, and the property it sets (`service.adb.tcp.port`) is refused to
+     * `setprop` from the shell user. Termux on the same phone has an adb client
+     * whose key is already paired, so the app's part is to notice that the port
+     * is gone and ask Termux to run the script that sends `tcpip:5555`. Every
+     * decision — when to ask, how often, whether Termux can be used at all —
+     * stays here. {@link PinTransport} is the seam the in-app TLS client (#5)
+     * will use; Termux remains the fallback.
  */
 public final class PinnedPort {
     public static final int PORT = 5555;
@@ -141,6 +144,7 @@ public final class PinnedPort {
         boolean installed = hasTermux(c);
         boolean usable = installed && hasTermuxPermission(c);
         String termux = !installed ? "missing" : usable ? "usable" : "no_permission";
+        boolean unlocked = isUserUnlocked(c);
         if (isListening()) {
             noteVerbose(c, "tick port=open termux=" + termux + " action=listen");
             noteProbeFallback(c);
@@ -152,6 +156,18 @@ public final class PinnedPort {
                 state = setState("listening on " + PORT);
             }
             journal(c, "info", "pin.state", state);
+            return state;
+        }
+        // Termux is not direct-boot aware: its home and adb state live in
+        // credential-encrypted storage, so a request sent now is deferred until
+        // the unlock and arrives too late. Probe the port above (an already
+        // listening 5555 is still worth reporting), but do not ask Termux. The
+        // monitor forces a check on ACTION_USER_UNLOCKED.
+        if (!PinGate.termuxAllowed(unlocked)) {
+            noteVerbose(c, "tick port=closed termux=" + termux + " action=blocked_locked");
+            String state = setState(closedState(
+                    "closed (user is locked; pin resumes at unlock)"));
+            journal(c, "info", PinGate.BLOCKED_LOCKED, PinGate.lockedDetail());
             return state;
         }
         if (!installed) {
@@ -200,7 +216,7 @@ public final class PinnedPort {
         }
         // The ask itself is network/unbounded work; a failure still settles the
         // window so a refused background start is not retried in a tight loop.
-        boolean asked = askTermux(c);
+        boolean asked = askPinTransport(c);
         synchronized (LOCK) {
             state = closedState(asked
                     ? "closed (asked Termux)" : "closed (could not reach Termux)");
@@ -306,6 +322,51 @@ public final class PinnedPort {
 
     private static boolean askTermux(Context c) {
         return askTermux(c, SCRIPT);
+    }
+
+    /**
+     * The pin transports to try, in order. Termux is the fallback and the only
+     * implementation today. The in-app TLS transport (#5) slots in ahead of it
+     * once #4 is verified; nothing fake is registered in the meantime.
+     */
+    static PinTransport[] transports(Context c) {
+        return new PinTransport[] { new TermuxPinTransport(c) };
+    }
+
+    private static boolean askPinTransport(Context c) {
+        for (PinTransport transport : transports(c)) {
+            if (transport.request(PORT)) {
+                noteVerbose(c, "pin transport " + transport.name() + " took the request");
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Termux's adb client is already paired; RUN_COMMAND runs pin-adb-port.sh. */
+    private static final class TermuxPinTransport implements PinTransport {
+        private final Context context;
+
+        TermuxPinTransport(Context c) {
+            context = c;
+        }
+
+        @Override
+        public String name() {
+            return "termux";
+        }
+
+        @Override
+        public boolean request(int port) {
+            // The script pins PinnedPort.PORT; the interface carries the port
+            // so the in-app transport can send `tcpip:<port>` directly.
+            return askTermux(context);
+        }
+    }
+
+    private static boolean isUserUnlocked(Context c) {
+        UserManager um = (UserManager) c.getSystemService(Context.USER_SERVICE);
+        return um == null || um.isUserUnlocked();
     }
 
     private static boolean askTermux(Context c, String script) {

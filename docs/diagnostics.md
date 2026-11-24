@@ -238,6 +238,8 @@ ring buffer, and never contains a passphrase, control token or pairing code.
 | `ensure.changed` | info | this call enabled wireless debugging |
 | `ensure.noop` | info | wireless debugging was already enabled |
 | `pin.state` | info | the 5555 probe is listening (the state includes a fresh script result) |
+| `pin.wait_for_wifi` | info | a service started before unlock has no Wi-Fi network yet; the first pin attempt waits for `ConnectivityManager` |
+| `pin.blocked_locked` | info | the 5555 probe is closed and user 0 is locked; Termux is not asked until `ACTION_USER_UNLOCKED` because its home is credential-encrypted |
 | `pin.result` | info | Termux returned a successful `pin-adb-port.sh` result |
 | `pin.termux_missing` | warn | Termux is not installed; install it from F-Droid and set `allow-external-apps=true` |
 | `pin.external_apps` | warn | Termux refused `RUN_COMMAND` because `allow-external-apps` is off; set it in `~/.termux/termux.properties` |
