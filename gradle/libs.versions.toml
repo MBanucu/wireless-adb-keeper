@@ -4,8 +4,8 @@
 # bootstrap and must keep working with javac/d8/aapt alone. The Android package,
 # versionCode, versionName, minSdk and targetSdk still come from the canonical
 # AndroidManifest.xml, which both builds read, so this file owns only what
-# Gradle adds on top of that: AGP, the compile SDK and the one runtime
-# dependency.
+# Gradle adds on top of that: AGP, the compile SDK and the Gradle-only
+# runtime dependencies.
 #
 # docs/termux-build.md explains the dependency policy and the JitPack fallback.
 
@@ -23,10 +23,16 @@ compileSdk = "35"
 # docs/termux-build.md before changing either.
 libadb = "3.1.1"
 
+# Android 9+ hides the Conscrypt TLS exporter that libadb's pairing uses.
+# This adds only that one class to the hidden-API exemption list at runtime.
+# Keep it aligned with libadb's supported Android versions.
+hiddenapibypass = "6.1"
+
 [libraries]
 # Pairing (SPAKE2 + TLS) only; build.sh never sees this and its APK has no
 # dependency, no native library and no pairing screen.
 libadb-android = { module = "com.github.MuntashirAkon:libadb-android", version.ref = "libadb" }
+hiddenapibypass = { module = "org.lsposed.hiddenapibypass:hiddenapibypass", version.ref = "hiddenapibypass" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -125,10 +125,12 @@ abstract class StageManifest : DefaultTask() {
             ?: throw GradleException("${canonical.get().asFile} has no <application> element")
 
         // PairActivity comes from src-pairing, so only this build declares it;
-        // build.sh keeps a manifest that matches its own sources.
+        // build.sh keeps a manifest that matches its own sources. Export it in
+        // both debug and release so adb/automation can open the pairing screen;
+        // pairing still requires the live six-digit code.
         val activity = document.createElement("activity")
         activity.setAttributeNS(android, "android:name", ".PairActivity")
-        activity.setAttributeNS(android, "android:exported", "false")
+        activity.setAttributeNS(android, "android:exported", "true")
         application.appendChild(activity)
 
         val output = staged.get().asFile
@@ -463,6 +465,8 @@ android {
 // coordinate and version live in gradle/libs.versions.toml.
 dependencies {
     implementation(libs.libadb.android)
+    // Only used to allow libadb's Conscrypt TLS exporter on Android 9+.
+    implementation(libs.hiddenapibypass)
 }
 
 tasks.named("preBuild") {

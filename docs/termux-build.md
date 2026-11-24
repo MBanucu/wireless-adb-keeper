@@ -22,6 +22,7 @@ Verified on 2026-11-24 on Termux aarch64 / Android 15, unrooted, with
 | SDK | `$HOME/android-sdk`, platform 35 |
 | aapt2 | Termux 16.0.0.4, passed as `android.aapt2FromMavenOverride=$PREFIX/bin/aapt2` |
 | dependency | `com.github.MuntashirAkon:libadb-android:3.1.1` from JitPack, SHA-256 pinned |
+| dependency | `org.lsposed.hiddenapibypass:hiddenapibypass:6.1` from Maven Central, SHA-256 pinned |
 | canonical APK | `build-gradle/outputs/apk/debug/wireless-adb-keeper-debug.apk` (8.8 MB) |
 | bootstrap APK | `wifidebug.apk` (97 KB) |
 | `./gradlew --offline probe` | BUILD SUCCESSFUL in 57 s (cold configuration cache) |
@@ -153,6 +154,7 @@ and the argument passing without a device, SDK or Gradle.
 | `agp` | the `android-application` plugin alias |
 | `compileSdk` | Gradle and the checks in `settings.gradle.kts` / the tools script |
 | `libadb` | the `libadb-android` library alias |
+| `hiddenapibypass` | the hidden-API exemption alias used during pairing |
 
 The Android package and version still come from `AndroidManifest.xml`, which
 `build.sh` also feeds to `aapt`. That is deliberate: the manifest is the one
@@ -164,8 +166,9 @@ file both builds read, and moving the version into the catalog would make
 ### What is pinned
 
 `gradle/verification-metadata.xml` carries a SHA-256 for every resolved
-artifact, including `libadb-android` and its transitive
-`com.github.MuntashirAkon.spake2-java:spake2-android`. Dependency verification
+artifact, including `libadb-android`, its transitive
+`com.github.MuntashirAkon.spake2-java:spake2-android`, and
+`hiddenapibypass`. Dependency verification
 runs on every build; a changed artifact fails with Gradle's verification error
 instead of silently entering the APK.
 
