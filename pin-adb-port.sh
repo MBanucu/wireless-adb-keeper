@@ -84,7 +84,7 @@ try_tcpip() {
 }
 
 # 1. A serial the keepalive already holds (cheapest, usually the TLS port).
-# 2. The port adbd advertises over mDNS.
+# 2. The port adbd advertises over mDNS (adb-connect from adb-harness).
 # 3. The shared discovery helper: the phone's TCP table when a serial is
 #    attached (one round trip), otherwise a scan of the shared range.
 found=""
@@ -92,7 +92,12 @@ for port in $(adb devices 2>/dev/null | awk '$2=="device"{print $1}' | awk -F: '
     if try_tcpip "$port"; then found=1; break; fi
 done
 if [ -z "$found" ]; then
-    for port in $(discover_mdns 3); do
+    mdns_ports=$(discover_mdns 3)
+    mdns_status=$?
+    if [ "$mdns_status" -eq 3 ]; then
+        log "mdns unavailable (adb-connect/adb-harness); falling back to the TCP table/scan"
+    fi
+    for port in $mdns_ports; do
         if try_tcpip "$port"; then found=1; break; fi
     done
 fi

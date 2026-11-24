@@ -2,9 +2,10 @@
 # Wait for adbd to appear and connect. Used after Wi-Fi was disconnected.
 #
 # The pinned port is tried first, so a phone the app has pinned to 5555
-# reconnects without a scan. Then the port mDNS advertises, then the shared
-# discovery helper (the phone's TCP table if a serial is attached, otherwise a
-# loopback scan). PORT_START/PORT_END and ADB_PIN_PORT override the defaults.
+# reconnects without a scan. Then the port adb-connect (adb-harness) finds over
+# mDNS, then the shared discovery helper (the phone's TCP table if a serial is
+# attached, otherwise a loopback scan). PORT_START/PORT_END and ADB_PIN_PORT
+# override the defaults.
 #
 # Result: the last stdout line is machine readable, for the app:
 #   RESULT connected=<port> | RESULT error=timeout

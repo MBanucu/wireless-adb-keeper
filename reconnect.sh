@@ -3,9 +3,9 @@
 #
 # adbd picks a new random port every time wireless debugging is restarted,
 # so the previous "adb connect 127.0.0.1:PORT" address goes stale. This tries
-# the pinned port first, then the port mDNS advertises, then the shared
-# discovery helper (the phone's TCP table if a serial is attached, otherwise a
-# loopback scan).
+# the pinned port first, then the port adb-connect (adb-harness) finds over
+# mDNS, then the shared discovery helper (the phone's TCP table if a serial is
+# attached, otherwise a loopback scan).
 #
 # Usage: ./reconnect.sh
 

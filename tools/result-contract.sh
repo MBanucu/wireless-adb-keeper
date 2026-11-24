@@ -14,7 +14,7 @@ mkdir -p "$WORK/bin" "$WORK/repo"
 for f in pin-adb-port.sh wait_adb.sh wifi-on.sh discover.sh scan_ports.py; do
     cp "$ROOT/$f" "$WORK/repo/$f" || exit 1
 done
-# Leave adb-mdns.py out: with it absent, discovery skips mDNS and stays local.
+# ADB_CONNECT= disables mDNS: without adb-harness, discovery stays local.
 chmod +x "$WORK/repo/pin-adb-port.sh" "$WORK/repo/wait_adb.sh" "$WORK/repo/wifi-on.sh"
 
 cat > "$WORK/bin/adb" <<'FAKE'
@@ -69,7 +69,7 @@ run() {
     local name="$1" expected="$2" want="$3" script="$4"
     shift 4
     local out code last
-    out=$(cd "$WORK/repo" && env PATH="$WORK/bin:$PATH" "$@" \
+    out=$(cd "$WORK/repo" && env PATH="$WORK/bin:$PATH" ADB_CONNECT= "$@" \
         timeout 40 bash "$script" 2>&1)
     code=$?
     last=$(printf '%s\n' "$out" | awk 'NF { line = $0 } END { print line }')

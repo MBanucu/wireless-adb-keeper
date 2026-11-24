@@ -9,7 +9,8 @@
 # Port discovery, cheapest first:
 #   0. the port the app pinned adbd to (ADB_PIN_PORT, 5555)
 #   1. the port used last time (survives a plain Wi-Fi reconnect)
-#   2. mDNS: adbd advertises _adb-tls-connect._tcp itself (adb-mdns.py)
+#   2. mDNS: adbd advertises _adb-tls-connect._tcp itself (adb-connect from
+#      adb-harness, pinned in tools/requirements.txt)
 #   3. the phone's TCP table if a serial is attached, otherwise a TCP scan of
 #      the kernel's ephemeral range (PORT_START/PORT_END override the range;
 #      the default is 32768-60999)
@@ -26,7 +27,11 @@ cd "$SCRIPT_DIR" || exit 1
 
 LOG="adb-keepalive.log"
 MDNS=0
-discover_mdns_available && MDNS=1
+MDNS_INFO=
+if discover_mdns_available; then
+    MDNS=1
+    MDNS_INFO=$(discover_mdns_version)
+fi
 
 log() {
     echo "$(date '+%H:%M:%S') $*" | tee -a "$LOG"
@@ -131,7 +136,7 @@ if command -v termux-wake-lock >/dev/null 2>&1; then
         LOCKED=1
     fi
 fi
-log "watching for wireless debugging (ports $PORT_START-$PORT_END, mdns=$MDNS)"
+log "watching for wireless debugging (ports $PORT_START-$PORT_END, mdns=$MDNS${MDNS_INFO:+, $MDNS_INFO})"
 
 last=""
 was_connected=""
@@ -186,12 +191,18 @@ while true; do
         continue
     fi
 
-    # 2. mDNS: the advertisement carries the new port directly.
+    # 2. mDNS: adb-connect reads the advertisement and reports the port it
+    #    connected to. An older adb-harness has no exit 3, so discover.sh
+    #    recognises a missing prerequisite from its message instead.
     if [ "$MDNS" = "1" ]; then
         started=$(date +%s)
         ports=$(discover_mdns 3)
+        mdns_status=$?
         took=$(( $(date +%s) - started ))
-        if [ -n "$ports" ]; then
+        if [ "$mdns_status" -eq 3 ]; then
+            MDNS=0
+            log "mdns unavailable (adb-connect/adb-harness); using the TCP table/scan"
+        elif [ -n "$ports" ]; then
             mdns_misses=0
             for p in $ports; do
                 if try_port "$p" 1; then

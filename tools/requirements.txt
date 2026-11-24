@@ -1,0 +1,10 @@
+# The discovery path for the keeper scripts (#68).
+#
+# adb-connect reads adbd's `_adb-tls-connect._tcp` / `_adb-tls-pairing._tcp`
+# advertisements and hands the port to adb. The local adb-mdns.py fork is gone;
+# tools/check-adb-harness.sh fails if a zeroconf browser grows back here.
+#
+# 0.2.3 is the newest PyPI release and predates the documented 0/1/2/3
+# exit-code table (only 0 and 1). discover.sh handles both contracts.
+# Install with: bash tools/setup-adb-harness.sh
+adb-harness[mdns]==0.2.3

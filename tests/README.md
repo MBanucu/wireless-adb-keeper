@@ -104,6 +104,23 @@ would only test a mock and call it green. Device behaviour is verified by hand:
 re-pin path), and a device suite such as `tests/device.sh` is run manually on the
 phone. Neither is part of `probe`, and neither belongs in this workflow.
 
+## Discovery tooling (#68)
+
+The scripts' mDNS lookup is `adb-connect` from the pinned `adb-harness[mdns]`
+(`tools/requirements.txt`), not a local zeroconf fork. Set it up once:
+
+```bash
+bash tools/setup-adb-harness.sh   # creates tools/.venv
+bash tools/check-adb-harness.sh   # policy: no zeroconf outside the dependency
+```
+
+`discover.sh` finds `tools/.venv/bin/adb-connect` first, then `adb-connect` on
+`PATH`; `ADB_CONNECT` overrides both and an empty value disables mDNS (used by
+`tools/result-contract.sh`). `tools/pair-local-test.sh` fakes `adb-connect` so
+the pairing flow still runs with no phone, network or zeroconf install. The
+loopback/TCP-table fallback remains in `scan_ports.py`/`discover.sh` until
+adb-harness grows that path.
+
 ## Writing a suite
 
 A suite is a `public final` class with a `public static void main(String[])`,

@@ -19,5 +19,9 @@ local.properties
 *.png
 __pycache__/
 
+# pinned adb-harness environment (tools/setup-adb-harness.sh)
+tools/.venv/
+.venv/
+
 # local scratch probes
 mdns_probe.py
