@@ -58,8 +58,10 @@ Gradle build on top of the unchanged layout (`build.gradle.kts`, wrapper 9.9.2,
 staged manifest, output in `build-gradle/`), so a declared dependency is possible
 at all. `build.sh` untouched. Both builds verified. The follow-up hardening in
 #69 moved versions into `gradle/libs.versions.toml`, pinned the wrapper
-distribution hash, added dependency verification, and replaced the staged-manifest
-regex with a DOM transformation and a component/permission check.
+distribution hash, added dependency verification, committed the JitPack
+artifacts under `gradle/vendor/` so the canonical build no longer needs JitPack,
+and replaced the staged-manifest regex with a DOM transformation and a
+component/permission check.
 
 *Done when:* `./gradlew assembleDebug` produces an APK with the same package,
 version and components as `build.sh`. **Met.**

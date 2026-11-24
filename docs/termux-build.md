@@ -21,7 +21,7 @@ Verified on 2026-11-24 on Termux aarch64 / Android 15, unrooted, with
 | JDK | OpenJDK 21.0.13 |
 | SDK | `$HOME/android-sdk`, platform 35 |
 | aapt2 | Termux 16.0.0.4, passed as `android.aapt2FromMavenOverride=$PREFIX/bin/aapt2` |
-| dependency | `com.github.MuntashirAkon:libadb-android:3.1.1` from JitPack, SHA-256 pinned |
+| dependency | `com.github.MuntashirAkon:libadb-android:3.1.1`, vendored in `gradle/vendor/` and SHA-256 pinned |
 | dependency | `org.lsposed.hiddenapibypass:hiddenapibypass:6.1` from Maven Central, SHA-256 pinned |
 | canonical APK | `build-gradle/outputs/apk/debug/wireless-adb-keeper-debug.apk` (8.8 MB) |
 | bootstrap APK | `wifidebug.apk` (97 KB) |
@@ -172,15 +172,20 @@ artifact, including `libadb-android`, its transitive
 runs on every build; a changed artifact fails with Gradle's verification error
 instead of silently entering the APK.
 
+The two modules are also committed under `gradle/vendor/`, so the canonical
+build no longer needs JitPack to resolve them. `tools/vendor-libadb.sh --check`
+verifies the committed bytes against the metadata without a Gradle cache; CI
+runs it before any Gradle work.
+
 `./gradlew checkDependencyPolicy` is part of `probe` and `check`. It asserts
 that the version in the catalog still has a component entry and an AAR checksum
 in the metadata, so a version bump cannot quietly disable the pin.
 
 Some entries are host-specific and are added by hand:
 
-- The two JitPack POM checksums (`origin="Vendored"`): Gradle normally resolves
-  the `.module` metadata and never asks for the POM, but the vendor tree needs
-  it. A metadata regeneration may drop them; keep them, or rerun
+- The two POM checksums (`origin="Vendored"`): a Maven directory repository
+  may be asked for the POM even though Gradle normally resolves the `.module`
+  metadata. A metadata regeneration may drop them; keep them, or rerun
   `tools/vendor-libadb.sh` and add the two hashes again.
 - The `aapt2` platform jars: Termux uses the override, so it never resolves
   them. CI's Ubuntu runner resolves `-linux.jar`; macOS and Windows resolve
@@ -212,15 +217,23 @@ build tools.
 ### JitPack, the vendor tree, and the fallback
 
 JitPack is a network and availability dependency, and its artifacts are not
-immutable the way Maven Central's are. The order of preference is:
+immutable the way Maven Central's are. `gradle/vendor/` is committed to the
+repository and is the project-controlled copy: `settings.gradle.kts` lists that
+directory as the first repository, so the normal path never asks JitPack for
+these two modules. The order is:
 
-1. **The Gradle cache**, pinned by `verification-metadata.xml`. This is the
-   normal phone path: `--offline` works once the cache is warm.
-2. **A project-controlled vendor tree.** `tools/vendor-libadb.sh` copies the two
-   JitPack modules and their POM/module metadata from the Gradle cache into
-   `gradle/vendor/`, verifying every file against the metadata first.
-   `settings.gradle.kts` already lists that directory as the first repository,
-   so committing it makes the build independent of JitPack:
+1. **The committed vendor tree.** Both modules and their POM/module metadata
+   live in `gradle/vendor/`; every file's SHA-256 is in
+   `verification-metadata.xml`, so a changed or truncated file fails
+   verification instead of entering the APK. `tools/vendor-libadb.sh --check`
+   validates the tree and needs no Gradle cache, so CI runs it on every build.
+2. **The Gradle cache**, pinned by the same metadata. A checkout without the
+   vendor directory falls back to this once it is warm, which is what makes
+   `--offline` work.
+3. **JitPack**, the upstream source. It is contacted only for a version the
+   vendor tree does not carry (a deliberate bump) or when the tree is absent.
+   `tools/vendor-libadb.sh` then copies the resolved bytes into `gradle/vendor/`
+   after verifying them against the metadata:
 
    ```bash
    tools/vendor-libadb.sh
@@ -229,23 +242,26 @@ immutable the way Maven Central's are. The order of preference is:
    ./gradlew --offline assembleDebug
    ```
 
-3. **A controlled mirror.** Publish the same group/artifact/version to a Maven
+4. **A controlled mirror.** Publish the same group/artifact/version to a Maven
    repository the project controls, add it ahead of JitPack in
    `settings.gradle.kts`, and keep the same verification metadata. The bytes
    must match the pinned hashes; a mirror that re-signs or rebuilds the AAR is a
    different dependency and needs a deliberate version bump and metadata
    regeneration.
-4. **No dependency at all.** `./build.sh` still produces `wifidebug.apk` with
-   the Termux path and no pairing screen. It is the honest fallback when
-   JitPack and the cache are both unavailable.
+5. **No dependency at all.** `./build.sh` still produces `wifidebug.apk` with
+   the Termux path and no pairing screen. It is the honest fallback when the
+   vendor tree, JitPack and the cache are all unavailable.
 
-Bumping `libadb` is a deliberate, three-file change:
+Bumping `libadb` is a deliberate change to the catalog, the metadata and the
+vendor tree:
 
 ```bash
 # 1. edit gradle/libs.versions.toml
-# 2. regenerate the metadata (needs the new artifact)
-./gradlew --write-verification-metadata sha256 assembleDebug
-# 3. verify the policy and the offline path
+# 2. resolve and regenerate the metadata (needs the new artifact from JitPack)
+OFFLINE=0 tools/termux-build.sh --write-verification-metadata sha256 assembleDebug
+# 3. refresh the committed vendor tree with the verified new bytes
+tools/vendor-libadb.sh
+# 4. verify the policy and the offline path
 ./gradlew --offline checkDependencyPolicy assembleDebug
 ```
 
@@ -331,8 +347,9 @@ repository's Gradle 10 deprecations. What remains:
   Kotlin support configures a Java-only project. It is scheduled for removal in
   **Gradle 11**, comes from the plugin (not from this build script), and does
   not affect the configuration cache. `android.builtInKotlin=false` removes it
-  but adds an AGP 10 deprecation in AGP 9.5, so the upstream warning is left
-  visible rather than trading one for the other.
+  but makes AGP 9.5.2 fail to store a configuration cache entry
+  (`processDebugNavigationResources` cannot serialize its navigation files), and
+  the configuration cache matters more, so the upstream warning is left visible.
 - **`android.aapt2FromMavenOverride` is experimental.** It is the documented
   Termux workaround. `android.sync.suppressAgpWarnings=UNSUPPORTED_PROJECT_OPTION_USE`
   suppresses only that unsupported-option notice.
