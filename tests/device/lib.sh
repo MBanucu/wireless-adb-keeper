@@ -58,7 +58,7 @@ SKIPPED=${SKIPPED:-0}
 # device command in the runner's state directory as well.
 _last() {
     LAST_COMMAND=$1
-    printf '%s\n' "$1" > "$DEVICE_STATE/last-command" 2>/dev/null || true
+    printf '%s\n' "$1" 2>/dev/null > "$DEVICE_STATE/last-command" || true
 }
 
 # ---------------------------------------------------------------- adb plumbing

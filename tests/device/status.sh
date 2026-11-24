@@ -34,10 +34,33 @@ status_port=$(printf '%s\n' "$first" | field pinned_port)
 assert_eq "diag has a port_5555 field" 1 "$([ -n "$port" ] && echo 1 || echo 0)"
 assert_eq "status pinned_port matches diag port_5555" "$port" "$status_port"
 
-listening=0
-if port_listening; then
-    listening=1
-fi
+# PinnedPort.state() is refreshed by the monitor's tick, so it can lag the
+# socket by one interval after adbd comes back. Wait for the cached value and
+# the independent probe to agree instead of sampling one instant.
+port_expected() {
+    case $1 in
+        'listening on 5555'*) printf '1\n' ;;
+        *) printf '0\n' ;;
+    esac
+}
+expected=0
+deadline=$(( $(date +%s) + 15 ))
+while :; do
+    diag=$(keeper diag)
+    port=$(printf '%s\n' "$diag" | field port_5555)
+    expected=$(port_expected "$port")
+    listening=0
+    if port_listening; then
+        listening=1
+    fi
+    if [ "$listening" -eq "$expected" ]; then
+        break
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+        break
+    fi
+    sleep 1
+done
 case $port in
     'listening on 5555'*)
         assert_eq "port_5555 says listening and 5555 accepts" 1 "$listening"
@@ -47,14 +70,15 @@ case $port in
         ;;
 esac
 
+first=$(keeper status)
 second=$(keeper status)
-# last_result is the last connect outcome and local_link is a live network
-# state; both may legitimately change between two calls. Everything else is
-# the saved configuration and must agree.
+# last_result is the last connect outcome, local_link is a live network state,
+# and pinned_port follows the monitor's tick; all may legitimately change
+# between two calls. Everything else is saved configuration and must agree.
 normalize() {
-    grep -v -E '^(last_result|local_link)=' || true
+    grep -v -E '^(last_result|local_link|pinned_port)=' || true
 }
 diff_out=$(diff -u \
     <(printf '%s\n' "$first" | normalize) \
     <(printf '%s\n' "$second" | normalize) || true)
-assert_eq "two status calls agree (ignoring last_result/local_link)" "" "$diff_out"
+assert_eq "two status calls agree (ignoring last_result/local_link/pinned_port)" "" "$diff_out"

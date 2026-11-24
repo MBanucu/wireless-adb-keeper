@@ -12,6 +12,8 @@
 #   bash tests/device.sh --restore       # put back a dead run's state
 #   bash tests/device.sh --slow          # include the ring-buffer flap
 #   bash tests/device.sh --allow-reboot  # opt in to the #39 reboot scenario
+#   DEVICE_WIFI_PASSPHRASE=... bash tests/device.sh --only wifi
+#                                        # opt-in real Wi-Fi check
 #
 # The default tier needs only adb, bash and coreutils. `--record` uses the
 # adb-harness `capture` command when it is on PATH and never for a pass.
@@ -64,6 +66,8 @@ already working; it is deliberately not part of CI.
   bash tests/device.sh --restore       # put back a dead run's state
   bash tests/device.sh --slow          # include the ring-buffer flap
   bash tests/device.sh --allow-reboot  # opt in to the #39 reboot scenario
+  DEVICE_WIFI_PASSPHRASE=... bash tests/device.sh --only wifi
+                                       # opt-in real Wi-Fi check
 
 Exit codes: 0 all selected checks passed; 1 a suite or the restore failed;
 2 usage or an unknown --only name; 3 blocked (no adb, no device, missing
@@ -189,6 +193,14 @@ for file in "${discovered[@]}"; do
             *" $base "*) ;;
             *) continue ;;
         esac
+    fi
+    # The real-network check needs a credential and is skipped in the default
+    # run; an explicit --only wifi still runs it so a missing credential is a
+    # visible skip, never a silent pass.
+    if [ "$base" = wifi ] && [ -z "${DEVICE_WIFI_PASSPHRASE:-}" ] \
+            && [ "$only_set" = 0 ]; then
+        [ "$quiet" = 1 ] || printf 'skip wifi (set DEVICE_WIFI_PASSPHRASE to include the real-network check)\n'
+        continue
     fi
     suites+=("$suite_dir/$file")
 done

@@ -1,7 +1,8 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # cap.sh - flap the mode until the 200-event ring is full, then assert exactly
-# 200 lines and that the newest event survived. Slow on purpose: 210 provider
-# calls plus the monitor's reloads.
+# 200 lines and that the newest event survived. The 210 provider calls are real;
+# they run in device-side parallel batches because each host-side `keeper` call
+# starts a new adb shell and `content` process (about 1.1 s each).
 #
 # device-slow: 1
 set -euo pipefail
@@ -28,16 +29,19 @@ fi
 assert_eq "the monitor service is running" 1 \
     "$(wait_for_service 20 && echo 1 || echo 0)"
 
-# 210 mode writes guarantee more than the 200-event cap. The reload is
-# asynchronous, so the assertions below wait for the ring rather than assuming
-# it is full the instant the loop returns.
-for i in $(seq 1 210); do
-    if [ $((i % 2)) -eq 1 ]; then
-        keeper mode local >/dev/null
-    else
-        keeper mode auto >/dev/null
-    fi
-done
+# 210 mode writes guarantee more than the 200-event cap. One device-side
+# shell starts the calls concurrently, so the provider still handles every
+# write but the test does not pay for 210 host-to-device round trips. The final
+# sequential write makes the newest event deterministic.
+mode_burst() {
+    local mode=$1 count=$2
+    _last "content call --method set_mode --arg mode $mode (${count} parallel)"
+    dev_adb shell "for i in \$(seq 1 $count); do content call --uri '$AUTH' \
+        --method set_mode --arg mode '$mode' >/dev/null & done; wait"
+}
+mode_burst local 105
+mode_burst auto 105
+keeper mode auto >/dev/null
 
 deadline=$(( $(date +%s) + 30 ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
