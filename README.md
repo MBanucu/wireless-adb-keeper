@@ -101,8 +101,10 @@ samples and cannot be published, so it is the GitHub-handle form instead.
   range, pinned-port default, mDNS, the phone's `/proc/net/tcp` table, the loopback
   scan, and connect-and-verify. Sourced by the other scripts so they cannot drift
   apart again.
-- Reboot/unlock and the autostart toggler live in the sibling `phone-link-tools`
-  repository: `reboot.sh` waits for the new boot, `unlock.sh` clears the keyguard.
+- Reboot/unlock live in the sibling `phone-link-tools` repository: `reboot.sh`
+  waits for the new boot, `unlock.sh` clears the keyguard.
+- `autostart-allow.sh` — drives DokeOS's autostart list over adb, because no
+  grant reaches it. `--check "Wireless ADB Keeper"` reports without toggling.
 
 ## Reboot and unlock
 
@@ -130,13 +132,47 @@ script wakes the screen, dismisses the keyguard and types the PIN, retrying unti
 `dumpsys user` reports `RUNNING_UNLOCKED`. Measured on this phone: adbd back at
 t+44 s, `sys.boot_completed` at t+52 s, unlocked at t+55 s.
 
-It also matters for apps that start at boot. `LOCKED_BOOT_COMPLETED` *is*
-delivered on this device — the earlier note here blamed the vendor's autostart
-policy and was wrong. What a package needs is `RECEIVE_BOOT_COMPLETED`, and
-`android:directBootAware="true"` written on the receiver itself: DokeOS does not
-inherit it from `<application>`, so the broadcast resolves no component and the
-process never starts. With both in place the proxy listens before the first
-unlock; unlocking is then only needed for the laptop's own uplink.
+### Two independent boot gates (DokeOS)
+
+On the XPLORE 2 a reboot has two independent gates. Passing one does not pass
+the other, and neither is visible as "port closed" alone:
+
+1. **DokeOS Auto Start Management** — **System Manager → App Management →
+   Auto Start Management**, allow **Wireless ADB Keeper**. This decides whether
+   the package may receive boot broadcasts at all. The manifest is necessary and
+   already correct here — `RECEIVE_BOOT_COMPLETED` plus
+   `android:directBootAware="true"` on `BootReceiver` itself, since DokeOS does
+   not inherit it from `<application>` — but it is not sufficient. With the row
+   off, DokeOS leaves the package `stopped=true` at boot and logs
+   `BVPFWLogger: AppAutoStartupPolicy: prevent start receiver of package ...`.
+   The app-targeted `LOCKED_BOOT_COMPLETED`/`BOOT_COMPLETED` then arrive only
+   when the app is opened by hand: measured **+238 s** on the 2026-11-24 boot,
+   with `process_started_after_boot_s=238`. With the row on, delivery was about
+   **27 s** after boot, before the first unlock.
+2. **Doze / battery exemption** — **Settings → Apps → Wireless ADB Keeper →
+   Battery → Unrestricted** (or `adb shell cmd deviceidle whitelist
+   +io.github.mbanucu.wirelessadbkeeper`). This keeps the monitor from being
+   stopped after boot. It does not deliver the boot broadcast, so it cannot
+   compensate for gate 1.
+
+Verify each after a reboot with **no manual launch**. Gate 1 is the first line
+below; gate 2 is a whitelist entry, not a boot event:
+
+```bash
+adb shell dumpsys deviceidle whitelist | grep io.github.mbanucu.wirelessadbkeeper
+./keeper.sh diag | grep -E 'oem\.autostart|process_started_after_boot_s'
+./keeper.sh diag | grep 'boot.received'   # the first line should say before unlock
+./keeper.sh diag | grep 'pin.state'       # listening on 5555
+```
+
+`oem.autostart=allowed` means a `boot.received` arrived **before unlock**, which
+DokeOS only does for a package it started at boot. `blocked` means the broadcast
+arrived only **after unlock** and the process started at least 120 s after boot
+— the measured gate-1 signature. `unknown` means the evidence is not enough
+(no `boot.received` this boot, an early unlock, or no DokeOS manager); it is
+never a claim that the row is on. The app does not read the vendor list; the
+signature permission is not available to it. To read what the screen shows, run
+`./autostart-allow.sh --check "Wireless ADB Keeper"` on an unlocked phone.
 
 ## Requirements
 
@@ -377,6 +413,7 @@ The script is written so that the last three are discovered rather than assumed.
 
 ```bash
 PHONE_SERIAL=192.168.77.232:5555 ./install.sh     # or just ./install.sh
+./install.sh --autostart                          # also drive the DokeOS row
 ```
 
 With no argument, `install.sh` prefers the canonical Gradle APK at
@@ -406,6 +443,14 @@ keeps logging, and only `pin.no_permission` (or the state line
 `closed (grant com.termux.permission.RUN_COMMAND; fix: adb shell pm grant …)`)
 says why the port never comes back — which is exactly the situation in
 which there is no cable to fix it with. Hence the script.
+
+On a DokeOS phone the install also prints the vendor prerequisite from the
+section above. Nothing is toggled by default: `--autostart` is the opt-in, and
+it checks that the phone is `RUNNING_UNLOCKED` first, then runs
+`autostart-allow.sh "Wireless ADB Keeper"` against the same serial. That script
+opens **System Manager → App Management → Auto Start Management**; a failure
+names the expected screen instead of guessing. After the next reboot,
+`./keeper.sh diag | grep oem.autostart` is the check.
 
 Both scripts the app runs live in `~/wireless-adb-keeper/`, so copy them there and mark
 them executable:
@@ -599,12 +644,12 @@ When something does not work — a boot that never pinned the port, a missing
 grant, auto-connect that stopped after a reboot — the answer is on the phone,
 not only in `logcat`.
 
-- **Diag tab** in the app: a `key=value` snapshot (uptime, process start, unlock
-  state, mode, service, wireless flag, port 5555, the last `pin_result` and
-  `wifi_result`, the `perm.*` permission audit, key and certificate presence,
-  journal size) above the recent events, with **Copy diagnostics** and
-  **Refresh**. The audit lists every capability with granted/not granted and
-  the exact command that fixes it, so a revoked
+- **Diag tab** in the app: a `key=value` snapshot (uptime, process start, the
+  `oem.autostart` boot gate, unlock state, mode, service, wireless flag, port
+  5555, the last `pin_result` and `wifi_result`, the `perm.*` permission audit,
+  key and certificate presence, journal size) above the recent events, with
+  **Copy diagnostics** and **Refresh**. The audit lists every capability with
+  granted/not granted and the exact command that fixes it, so a revoked
   `WRITE_SECURE_SETTINGS` is visible before anything is pressed.
 - **From adb** (and therefore from a script):
 

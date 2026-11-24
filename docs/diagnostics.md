@@ -18,6 +18,7 @@ fields around it.
 | `boot_id` | the boot counter, so a kept line can be tied to its boot |
 | `uptime_s` | `SystemClock.elapsedRealtime()` in seconds |
 | `process_started_after_boot_s` | when this process started, relative to boot |
+| `oem.autostart` | the DokeOS boot gate as `allowed`, `blocked` or `unknown`, with the evidence; never a read of the vendor list (see below) |
 | `unlocked` | whether credential-protected storage is readable |
 | `mode` | `auto` or `local` (saved connect mode) |
 | `service` | monitor foreground service: `running` or `stopped` |
@@ -99,6 +100,41 @@ there and the app does not pretend it was. The stages are journalled:
 The unlock always re-applies the saved mode, even when an earlier start command
 already did: re-registering an identical record is skipped by
 `SuggestionRegistry`, so the pass is cheap and the reboot case cannot be missed.
+
+### Two independent boot gates (DokeOS)
+
+A reboot on the XPLORE 2 has two independent gates. Neither one substitutes for
+the other:
+
+| Gate | Where | What it decides | How to verify |
+|---|---|---|---|
+| DokeOS Auto Start Management | **System Manager → App Management → Auto Start Management**, the app's row | whether the package may receive `LOCKED_BOOT_COMPLETED`/`BOOT_COMPLETED` at boot at all | `./keeper.sh diag \| grep oem.autostart` and the first `boot.received` line says `before unlock` |
+| Doze / battery exemption | **Settings → Apps → Wireless ADB Keeper → Battery → Unrestricted** (or `adb shell cmd deviceidle whitelist +io.github.mbanucu.wirelessadbkeeper`) | whether the monitor is kept alive after boot | `adb shell dumpsys deviceidle whitelist \| grep io.github.mbanucu.wirelessadbkeeper` |
+
+With the autostart row off, the vendor leaves the package `stopped=true` at boot
+and logs `BVPFWLogger: AppAutoStartupPolicy: prevent start receiver of package
+...`. The app-targeted boot broadcasts are then enqueued only when the app is
+opened by hand: on the 2026-11-24 boot that was +238 s, with
+`process_started_after_boot_s=238`, while an allowlisted boot delivered at
+~27 s, before unlock.
+
+`oem.autostart` derives its state from that delivery, because the vendor list
+itself is behind `com.freeme.freemanager.permission.ACCESS_INTERFACE` and the
+app cannot read it:
+
+| State | Evidence |
+|---|---|
+| `allowed` | the first `boot.received` **of this boot** says `before unlock` |
+| `blocked` | the first `boot.received` says `after unlock` **and** `process_started_after_boot_s >= 120`; the reason names the screen to enable |
+| `unknown` | no `boot.received` for this boot, an after-unlock delivery before 120 s, an unreadable/empty journal, or no DokeOS manager detected |
+
+The journal can outlive a reboot, so only lines at/after the current boot's
+wall-clock start count; a previous boot's `before unlock` line cannot make this
+boot look allowed. "Unknown" is deliberate: the app never reports `allowed`
+from the absence of a block, and a short after-unlock start can simply be an
+early unlock. `autostart-allow.sh --check "Wireless ADB Keeper"` reads the
+screen itself on an unlocked phone; that is the only path that reports what the
+vendor list says, and it is not on the app's snapshot.
 
 ### Local-only profile selection
 
