@@ -730,15 +730,19 @@ check() {
     # The post-unlock snapshot cannot tell a pre-unlock pin from one that only
     # arrived after the unlock. This opt-in check uses the USB samples for it.
     if [ "$REQUIRE_PREUNLOCK_PORT" = 1 ]; then
-        local sample_line first_bad= samples_bad=0
+        local sample_line first_bad= samples_bad=0 conclusive=0 port5555
         for sample_line in "${PU_LINES[@]}"; do
             [ "$(field_of "$sample_line" target)" = unlock ] && continue
             [ "$(field_of "$sample_line" ce)" = 1 ] && continue
             [ "$(field_of "$sample_line" wifi)" = up ] || continue
-            if [ "$(field_of "$sample_line" port5555)" = closed ]; then
-                [ -n "$first_bad" ] || first_bad=$sample_line
-                samples_bad=$((samples_bad + 1))
-            fi
+            port5555=$(field_of "$sample_line" port5555)
+            case "$port5555" in
+                closed)
+                    [ -n "$first_bad" ] || first_bad=$sample_line
+                    samples_bad=$((samples_bad + 1))
+                    ;;
+                open) conclusive=$((conclusive + 1)) ;;
+            esac
         done
         if [ "$samples_bad" -gt 0 ]; then
             bad "port 5555 is open before unlock" \
@@ -746,8 +750,11 @@ check() {
         elif [ "$pre_count" -eq 0 ]; then
             warn "port 5555 is open before unlock" \
                 "not measured: ${PU_REASON:-the pre-unlock window was not observed}"
+        elif [ "$conclusive" -eq 0 ]; then
+            warn "port 5555 is open before unlock" \
+                "not measured: no pre-unlock sample saw 5555 with Wi-Fi up while ce_available was false (ss unavailable or inconclusive)"
         else
-            ok "no pre-unlock sample saw 5555 closed while Wi-Fi was up"
+            ok "port 5555 was open in $conclusive pre-unlock sample(s) and closed in none"
         fi
     fi
 

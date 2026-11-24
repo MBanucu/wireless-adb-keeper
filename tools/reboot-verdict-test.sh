@@ -147,7 +147,7 @@ scenario() {
         printf 'kernel_boot_id=kernel-new\n'
         printf 'ip_ok=1\n'
         [ "$ip" = - ] || printf 'wlan_ip=%s\n' "$ip"
-        printf 'ss_ok=1\n'
+        printf 'ss_ok=%s\n' "${SCENARIO_SS_OK:-1}"
         local port
         for port in "$@"; do printf 'listen=%s\n' "$port"; done
     } >"$SCENARIOS/$number"
@@ -372,6 +372,16 @@ preunlock_scenarios open
 expect 0 "--require-preunlock-port passes once 5555 listens before unlock" \
     check "$TMP/preunlock-journal" "$STATE" --preunlock-wait 30 --require-preunlock-port
 contains 'preunlock.port5555=open' "the summary records the pre-unlock listener"
+
+# If ss is unavailable, every locked sample has port5555=unknown. That is not
+# proof that 5555 was open, so the strict flag must stay "not measured".
+SCENARIO_SS_OK=0
+preunlock_scenarios closed
+SCENARIO_SS_OK=1
+expect 0 "an unavailable socket table is not a pre-unlock pass" \
+    check "$TMP/preunlock-journal" "$STATE" --preunlock-wait 30 --require-preunlock-port
+contains 'not measured' "the unavailable sample says it was not measured"
+contains 'preunlock.port5555=unknown' "the summary records the unknown port"
 
 preunlock_scenarios closed
 expect 0 "the pre-unlock samples are machine-readable" \
