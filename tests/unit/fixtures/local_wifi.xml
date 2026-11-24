@@ -1,0 +1,15 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<!--
+  The shape of a shared_prefs/local_wifi.xml left by a build before profiles:
+  one legacy ssid, one encrypted passphrase slot, and the monitor settings.
+  The ciphertext and IV values are placeholders, not a real secret; the suite
+  supplies its own canary through the PassphraseStore fake.
+-->
+<map>
+    <string name="ssid">Home</string>
+    <string name="passphrase_ciphertext">placeholder-ciphertext-not-a-secret</string>
+    <string name="passphrase_iv">placeholder-iv-not-a-secret</string>
+    <boolean name="enabled" value="true" />
+    <string name="mode">local</string>
+    <long name="revision" value="7" />
+</map>
