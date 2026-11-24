@@ -1,0 +1,104 @@
+{
+  "formatVersion" : "1.1",
+  "component" : {
+    "group" : "com.github.MuntashirAkon",
+    "module" : "libadb-android",
+    "version" : "3.1.1",
+    "attributes" : {
+      "org.gradle.status" : "release"
+    }
+  },
+  "createdBy" : {
+    "gradle" : {
+      "version" : "9.0.0"
+    }
+  },
+  "variants" : [ {
+    "name" : "releaseVariantReleaseApiPublication",
+    "attributes" : {
+      "org.gradle.category" : "library",
+      "org.gradle.dependency.bundling" : "external",
+      "org.gradle.libraryelements" : "aar",
+      "org.gradle.usage" : "java-api"
+    },
+    "files" : [ {
+      "name" : "libadb-android-3.1.1.aar",
+      "url" : "libadb-android-3.1.1.aar",
+      "size" : 60368,
+      "sha512" : "043894e6fea6f95ee6a87f73500a7d1c26d233391f3771331a86611ff8e3baada1856776a61a1156deab56305a58e9c919c7095c50fa071bbe6e072e8a2973e2",
+      "sha256" : "e6fcb495a20a507ca4a125afc9c554e838a84b3a15fbcc29f7deafd0f88bbb58",
+      "sha1" : "eb5503ce487d133cab8c559b1b9b2d6f72df288c",
+      "md5" : "086c7b95cf45b40f4978cd2f94f11f79"
+    } ]
+  }, {
+    "name" : "releaseVariantReleaseRuntimePublication",
+    "attributes" : {
+      "org.gradle.category" : "library",
+      "org.gradle.dependency.bundling" : "external",
+      "org.gradle.libraryelements" : "aar",
+      "org.gradle.usage" : "java-runtime"
+    },
+    "dependencies" : [ {
+      "group" : "androidx.annotation",
+      "module" : "annotation",
+      "version" : {
+        "requires" : "1.9.1"
+      }
+    }, {
+      "group" : "org.bouncycastle",
+      "module" : "bcprov-jdk15to18",
+      "version" : {
+        "requires" : "1.81"
+      }
+    }, {
+      "group" : "com.github.MuntashirAkon.spake2-java",
+      "module" : "spake2-android",
+      "version" : {
+        "requires" : "2.2.1"
+      }
+    } ],
+    "files" : [ {
+      "name" : "libadb-android-3.1.1.aar",
+      "url" : "libadb-android-3.1.1.aar",
+      "size" : 60368,
+      "sha512" : "043894e6fea6f95ee6a87f73500a7d1c26d233391f3771331a86611ff8e3baada1856776a61a1156deab56305a58e9c919c7095c50fa071bbe6e072e8a2973e2",
+      "sha256" : "e6fcb495a20a507ca4a125afc9c554e838a84b3a15fbcc29f7deafd0f88bbb58",
+      "sha1" : "eb5503ce487d133cab8c559b1b9b2d6f72df288c",
+      "md5" : "086c7b95cf45b40f4978cd2f94f11f79"
+    } ]
+  }, {
+    "name" : "releaseVariantReleaseSourcePublication",
+    "attributes" : {
+      "org.gradle.category" : "documentation",
+      "org.gradle.dependency.bundling" : "external",
+      "org.gradle.docstype" : "sources",
+      "org.gradle.usage" : "java-runtime"
+    },
+    "files" : [ {
+      "name" : "libadb-android-3.1.1.jar",
+      "url" : "libadb-android-3.1.1.jar",
+      "size" : 40272,
+      "sha512" : "2e17df45f1f1f94b04d1df20700840bbf9d0438b4fe6fd778772f53997d4239d52214991cbca53325f0007e5444384d6fad863cbada244febceccf9d09e0e2cc",
+      "sha256" : "db7a5ace384ea64d44be01fe28574f1aaccde97f1336e67e35f56fa7ad998b9c",
+      "sha1" : "bb40f5369b1a18b7fea9df842becf688239d11dc",
+      "md5" : "726cdac0d79521998df64b3be7b93bac"
+    } ]
+  }, {
+    "name" : "releaseVariantReleaseJavaDocPublication",
+    "attributes" : {
+      "org.gradle.category" : "documentation",
+      "org.gradle.dependency.bundling" : "external",
+      "org.gradle.docstype" : "javadoc",
+      "org.gradle.usage" : "java-runtime"
+    },
+    "files" : [ {
+      "name" : "libadb-android-3.1.1.jar",
+      "url" : "libadb-android-3.1.1.jar",
+      "size" : 351056,
+      "sha512" : "deae1beebd13a67a188e667ffd21ac282dc175b02f79c88c935155b2d747380cfedba29b6a29143253b533266e7eb9c411cf15f08bba3b71dcfcbdc6e1b4235e",
+      "sha256" : "20db38f890b28fee765eabd72604aec14228f920dd239bd89126cbc30df66817",
+      "sha1" : "d67b1e65288271f0ac29a4cd54fd4d436729e716",
+      "md5" : "e7633afdd237d57b2d7c68c2f293c980"
+    } ]
+  } ]
+}

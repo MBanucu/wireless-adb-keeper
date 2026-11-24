@@ -56,7 +56,11 @@ version=$(sed -n 's/^libadb *= *"\([^"]*\)".*/\1/p' gradle/libs.versions.toml | 
 [ -n "$version" ] || die "could not read libadb version from gradle/libs.versions.toml"
 
 cache=${GRADLE_USER_HOME:-${HOME:-}/.gradle}/caches/modules-2/files-2.1
-[ -d "$cache" ] || die "no Gradle module cache at $cache; run the Gradle build once first"
+# --check only reads the committed tree: a fresh checkout (and CI) has no
+# module cache, and verifying already-vendored bytes must not need one.
+if [ "$check_only" = 0 ]; then
+    [ -d "$cache" ] || die "no Gradle module cache at $cache; run the Gradle build once first"
+fi
 
 modules=(
     "com.github.MuntashirAkon:libadb-android:$version"
@@ -73,9 +77,6 @@ verify_file() {
 
 for module in "${modules[@]}"; do
     IFS=: read -r group artifact artifact_version <<<"$module"
-    source_dir="$cache/$group/$artifact/$artifact_version"
-    [ -d "$source_dir" ] || die "no cached $group:$artifact:$artifact_version under $source_dir; run the Gradle build once"
-
     target="$dest/${group//./\/}/$artifact/$artifact_version"
     if [ "$check_only" = 1 ]; then
         [ -d "$target" ] || die "no vendored copy at $target"
@@ -88,6 +89,9 @@ for module in "${modules[@]}"; do
         printf 'vendor: %s:%s:%s verified\n' "$group" "$artifact" "$artifact_version"
         continue
     fi
+
+    source_dir="$cache/$group/$artifact/$artifact_version"
+    [ -d "$source_dir" ] || die "no cached $group:$artifact:$artifact_version under $source_dir; run the Gradle build once"
 
     # Copy the AAR plus the metadata Gradle needs to resolve it offline.
     mapfile -t files < <(find "$source_dir" -type f \( -name '*.aar' -o -name '*.pom' -o -name '*.module' \) | sort)

@@ -269,17 +269,19 @@ JitPack artifact, so the build pins it twice:
 - `gradle/verification-metadata.xml` carries a SHA-256 for every artifact,
   including `libadb-android` and its `spake2` transitive. A re-published JitPack
   artifact fails the build instead of entering it unnoticed.
-- `tools/vendor-libadb.sh` copies those artifacts into `gradle/vendor/`, a
-  project-controlled Maven repository that `settings.gradle.kts` consults first.
-  It refuses bytes that do not match the verification metadata.
+- `gradle/vendor/` is a committed, project-controlled Maven repository holding
+  both modules. `settings.gradle.kts` resolves it first, so a fresh checkout
+  needs no JitPack; `tools/vendor-libadb.sh` (re)creates it and refuses bytes
+  that do not match the verification metadata.
 
 ```bash
 ./gradlew checkDependencyPolicy    # the version has a checksum entry
-tools/vendor-libadb.sh --check     # verify a vendored tree, if one exists
+tools/vendor-libadb.sh --check     # verify the committed vendor tree
 ```
 
-JitPack stays the source until someone vendors the artifacts. If JitPack is
-unavailable, the fallbacks are, in order: the vendored tree, a controlled mirror
+JitPack is only the upstream source now: it is contacted when the catalog asks
+for a version the vendor tree does not have. If it is unavailable, the fallbacks
+are, in order: the committed vendor tree, the Gradle cache, a controlled mirror
 serving the same coordinates, or the dependency-free `build.sh` APK (pairing
 excluded). [`docs/termux-build.md`](docs/termux-build.md#dependencies) has the
 exact commands and the mirror procedure. Offline builds are unchanged:
