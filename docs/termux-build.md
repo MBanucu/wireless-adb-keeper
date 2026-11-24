@@ -173,11 +173,23 @@ instead of silently entering the APK.
 that the version in the catalog still has a component entry and an AAR checksum
 in the metadata, so a version bump cannot quietly disable the pin.
 
-The two JitPack POM checksums are the exception: Gradle normally resolves the
-`.module` metadata and never asks for the POM, so generation does not add them.
-They are recorded with `origin="Vendored"` because the vendor tree needs the
-POM when Gradle resolves from it. A metadata regeneration may drop them; keep
-them, or rerun `tools/vendor-libadb.sh` and add the two hashes again.
+Some entries are host-specific and are added by hand:
+
+- The two JitPack POM checksums (`origin="Vendored"`): Gradle normally resolves
+  the `.module` metadata and never asks for the POM, but the vendor tree needs
+  it. A metadata regeneration may drop them; keep them, or rerun
+  `tools/vendor-libadb.sh` and add the two hashes again.
+- The `aapt2` platform jars: Termux uses the override, so it never resolves
+  them. CI's Ubuntu runner resolves `-linux.jar`; macOS and Windows resolve
+  their own. The published hashes are listed for all of them.
+- A few BOM `.module` files (`guava-parent`, `junit-bom`,
+  `bc-jdk18on-bom`) that the Ubuntu runner resolved and the Termux cache did
+  not. They were added from Maven Central's published files after the first CI
+  run reported them.
+
+If a new host resolves an artifact that is not listed, Gradle fails closed.
+Add its published SHA-256 (or, for a project mirror, the exact bytes you
+served); do not disable verification.
 
 There is no `gradle.lockfile`. A global lock would cover AGP's plugin classpath
 and its many detached configurations, which changes with every AGP update, and
