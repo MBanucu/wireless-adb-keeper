@@ -13,10 +13,12 @@ package io.github.mbanucu.wirelessadbkeeper;
  *
  * <p>Unlock is a separate gate. Termux's home is credential-encrypted storage,
  * so a {@code RUN_COMMAND} before {@code ACTION_USER_UNLOCKED} is deferred until
- * the unlock and arrives too late to be useful. The port is still probed (an
- * already-listening 5555 is worth reporting), but no Termux request is sent and
- * a closed port journals {@code pin.blocked_locked} instead of
- * {@code pin.waiting}. The unlock forces one immediate check.
+ * the unlock and arrives too late to be useful. The in-app TLS transport is
+ * different: its key is in device-protected storage, so it may ask while the
+ * user is locked. The port is always probed (an already-listening 5555 is worth
+ * reporting); a closed port with no successful in-app pin journals
+ * {@code pin.blocked_locked} instead of {@code pin.waiting}. The unlock forces
+ * one immediate check.
  *
  * <p>The gate is a plain object so a JVM test can replay a locked boot, a
  * mid-boot unlock and a Wi-Fi association in either order.
@@ -31,7 +33,7 @@ public final class PinGate {
     public enum State {
         /** Started before unlock and no Wi-Fi network yet; do not probe. */
         WAITING_FOR_WIFI(WAIT_FOR_WIFI),
-        /** Wi-Fi is up, but the user is locked; probe, never ask Termux. */
+        /** Wi-Fi is up, but the user is locked; probe, only in-app TLS may ask. */
         WAITING_FOR_UNLOCK(BLOCKED_LOCKED),
         /** The user is unlocked; probe and ask the transport. */
         READY("");
@@ -75,10 +77,10 @@ public final class PinGate {
         return unlocked;
     }
 
-    /** The journal sentence for a closed port that could not ask Termux. */
+    /** The journal sentence for a closed port after the in-app TLS try. */
     public static String lockedDetail() {
-        return "the user is locked; Termux is not asked until ACTION_USER_UNLOCKED"
-                + " because its home is credential-encrypted";
+        return "the user is locked and the in-app TLS pin did not take; Termux is not"
+                + " asked until ACTION_USER_UNLOCKED because its home is credential-encrypted";
     }
 
     /**
@@ -105,7 +107,7 @@ public final class PinGate {
         return wifiReady;
     }
 
-    /** Whether a port request (Termux today) may leave the app. */
+    /** Whether Termux may be asked; in-app TLS is available separately. */
     public boolean allowsTransport() {
         return unlocked;
     }

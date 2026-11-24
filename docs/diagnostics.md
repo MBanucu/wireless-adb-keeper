@@ -239,7 +239,7 @@ ring buffer, and never contains a passphrase, control token or pairing code.
 | `ensure.noop` | info | wireless debugging was already enabled |
 | `pin.state` | info | the 5555 probe is listening (the state includes a fresh script result) |
 | `pin.wait_for_wifi` | info | a service started before unlock has no Wi-Fi network yet; the first pin attempt waits for `ConnectivityManager` |
-| `pin.blocked_locked` | info | the 5555 probe is closed and user 0 is locked; Termux is not asked until `ACTION_USER_UNLOCKED` because its home is credential-encrypted |
+| `pin.blocked_locked` | info | the 5555 probe is closed, user 0 is locked, and the in-app TLS pin did not take; Termux is not asked until `ACTION_USER_UNLOCKED` because its home is credential-encrypted |
 | `pin.result` | info | Termux returned a successful `pin-adb-port.sh` result |
 | `pin.termux_missing` | warn | Termux is not installed; install it from F-Droid and set `allow-external-apps=true` |
 | `pin.external_apps` | warn | Termux refused `RUN_COMMAND` because `allow-external-apps` is off; set it in `~/.termux/termux.properties` |
@@ -248,7 +248,11 @@ ring buffer, and never contains a passphrase, control token or pairing code.
 | `pin.script_failed` | warn | `pin-adb-port.sh` exited non-zero or printed an `error=` RESULT line |
 | `pin.no_result` | warn | Termux returned a bundle with no `RESULT` line |
 | `pin.port_closed` | warn | the script reported success, but `127.0.0.1:5555` still does not answer |
-| `pin.waiting` | info | Termux was asked to pin and the port or result is still pending |
+| `pin.waiting` | info | a transport was asked to pin and the port or result is still pending |
+| `pin.tls_ok` | info | the in-app TLS client sent `tcpip:5555` over the app's trusted key |
+| `pin.tls_timeout` | warn | the in-app TLS pin did not finish inside its bound |
+| `pin.tls_untrusted` | warn | adbd does not trust the app key; pair again before relying on the in-app pin |
+| `pin.tls_failed` | warn | the in-app TLS transport could not discover, connect, or send `tcpip`; Termux fallback remains |
 | `pin.fallback` | warn | Termux predates result reporting, so the port probe is the only evidence |
 | `script.result` | info/warn | a non-pin Termux script result (`wifi-on.sh`), with exit code and stderr |
 | `script.no_result` | warn | Termux sent no result bundle at all |

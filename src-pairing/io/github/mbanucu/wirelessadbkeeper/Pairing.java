@@ -3,14 +3,20 @@ package io.github.mbanucu.wirelessadbkeeper;
 import android.content.Context;
 import android.os.Build;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
 import java.io.File;
+import java.io.FileReader;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.nio.charset.Charset;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -49,6 +55,13 @@ public final class Pairing {
     private static final int CONNECT_MS = 10_000;
     private static final int VERIFY_MS = 20_000;
     private static final int PAIR_MS = 30_000;
+    /** Boot tries to pin quickly; a later 10 s tick can retry. */
+    private static final int PIN_DISCOVERY_MS = 6_000;
+    private static final int PIN_CONNECT_MS = 6_000;
+    private static final int PIN_MS = 12_000;
+    private static final int SCAN_PORT_START = 30_000;
+    private static final int SCAN_PORT_END = 60_999;
+    private static final int MAX_SCAN_CANDIDATES = 8;
 
     private Pairing() {}
 
@@ -192,6 +205,116 @@ public final class Pairing {
     }
 
     /**
+     * Sends {@code tcpip:<port>} over the app's own trusted TLS connection.
+     *
+     * <p>This is the pre-unlock path: the key and certificate are in
+     * device-protected storage, so the monitor can call it while the user is
+     * still locked. Discovery is mDNS first; if the advertisement is gone, the
+     * app reads its own listening sockets in the ephemeral range and tries the
+     * candidates. {@code tcpip} tears down the transport that sent it, so a
+     * close or EOF after the service request is the acknowledgement; the next
+     * port probe is the proof.
+     */
+    public static boolean pinPort(Context context, int port) {
+        allowConscryptExporter();
+        if (port < 1 || port > 65535) return false;
+        final PrivateKey privateKey;
+        final X509Certificate certificate;
+        try {
+            privateKey = loadKey(context);
+            certificate = AdbCertificate.loadOrCreate(context);
+        } catch (Exception e) {
+            Diag.warn(context, "pin.tls_failed", "could not load the app key: " + message(e));
+            return false;
+        }
+
+        Endpoint advertised = null;
+        try {
+            advertised = discoverOrNull(context, AdbMdns.SERVICE_TYPE_TLS_CONNECT, PIN_DISCOVERY_MS);
+        } catch (Throwable e) {
+            Diag.warn(context, "pin.tls_failed", "mDNS discovery failed: " + message(e));
+        }
+        if (advertised != null && tryPin(context, advertised, port, privateKey, certificate)) {
+            Diag.info(context, "pin.tls_ok", "asked adbd over TLS to listen on " + port);
+            return true;
+        }
+
+        // mDNS can be stale or absent at boot. /proc/net/tcp is readable from
+        // the app and keeps the fallback to listeners, not a blind 20k-port
+        // sweep. The range is Android's ephemeral range; a wrong candidate
+        // fails the TLS handshake and the next one is tried.
+        List<Endpoint> scanned = scanLocalPorts();
+        for (int i = 0; i < scanned.size() && i < MAX_SCAN_CANDIDATES; i++) {
+            if (tryPin(context, scanned.get(i), port, privateKey, certificate)) {
+                Diag.info(context, "pin.tls_ok", "asked adbd over TLS to listen on " + port
+                        + " via " + scanned.get(i).port);
+                return true;
+            }
+        }
+        Diag.warn(context, "pin.tls_failed", "no in-app TLS endpoint could pin port " + port);
+        return false;
+    }
+
+    private static boolean tryPin(final Context context, final Endpoint endpoint, final int port,
+                                  final PrivateKey privateKey, final X509Certificate certificate) {
+        final AtomicReference<Closeable> live = new AtomicReference<>();
+        try {
+            within(PIN_MS, live, new Attempt<Void>() {
+                @Override
+                public Void run() throws Exception {
+                    AdbConnection connection = AdbConnection.create(
+                            endpoint.address.getHostAddress(), endpoint.port,
+                            privateKey, certificate);
+                    live.set(connection);
+                    try {
+                        if (!connection.connect(PIN_CONNECT_MS, TimeUnit.MILLISECONDS, true)) {
+                            throw new IOException(noAnswer(PIN_CONNECT_MS));
+                        }
+                        try {
+                            AdbStream stream = connection.open("tcpip:" + port);
+                            live.set(stream);
+                            try {
+                                stream.close();
+                            } catch (Exception ignored) {
+                                // The service has already been sent.
+                            }
+                        } catch (IOException e) {
+                            // adbd acknowledges tcpip by restarting and closing
+                            // this transport; that is success, not a failure.
+                            if (!isTransportTeardown(e)) throw e;
+                        }
+                    } finally {
+                        try {
+                            connection.close();
+                        } catch (Exception ignored) {
+                            // Already torn down by adbd.
+                        }
+                    }
+                    return null;
+                }
+            });
+            return true;
+        } catch (TimeoutException e) {
+            Diag.warn(context, "pin.tls_timeout", noAnswer(PIN_MS));
+        } catch (AdbAuthenticationFailedException e) {
+            Diag.warn(context, "pin.tls_untrusted",
+                    "the phone does not trust this app's key; pair again");
+        } catch (Exception e) {
+            Diag.warn(context, "pin.tls_failed", message(e));
+        }
+        return false;
+    }
+
+    private static boolean isTransportTeardown(IOException e) {
+        String message = e.getMessage();
+        if (message == null) return false;
+        return message.contains("Stream closed")
+                || message.contains("Connection reset")
+                || message.contains("Broken pipe")
+                || message.contains("Socket closed");
+    }
+
+    /**
      * Runs an attempt on its own thread so a blocked socket connect, handshake
      * or read cannot hold the caller forever. On timeout the attempt's live
      * connection is closed first, which is what wakes the library's unbounded
@@ -265,6 +388,14 @@ public final class Pairing {
 
     private static Endpoint discover(final Context context, String serviceType, String failure)
             throws IOException {
+        Endpoint endpoint = discoverOrNull(context, serviceType, DISCOVERY_MS);
+        if (endpoint == null) {
+            throw new IOException(failure);
+        }
+        return endpoint;
+    }
+
+    private static Endpoint discoverOrNull(final Context context, String serviceType, long timeoutMs) {
         final CountDownLatch found = new CountDownLatch(1);
         final AtomicReference<Endpoint> result = new AtomicReference<>();
         AdbMdns mdns = new AdbMdns(context, serviceType,
@@ -281,17 +412,53 @@ public final class Pairing {
                 });
         mdns.start();
         try {
-            found.await(DISCOVERY_MS, TimeUnit.MILLISECONDS);
+            found.await(timeoutMs, TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } finally {
             mdns.stop();
         }
-        Endpoint endpoint = result.get();
-        if (endpoint == null) {
-            throw new IOException(failure);
+        return result.get();
+    }
+
+    /** Listening local ports in Android's ephemeral range, as a stale-mDNS fallback. */
+    private static List<Endpoint> scanLocalPorts() {
+        Set<Integer> ports = new LinkedHashSet<>();
+        readLocalPorts("/proc/net/tcp", ports);
+        readLocalPorts("/proc/net/tcp6", ports);
+        List<Endpoint> endpoints = new ArrayList<>();
+        try {
+            InetAddress loopback = InetAddress.getByName("127.0.0.1");
+            for (Integer port : ports) endpoints.add(new Endpoint(loopback, port));
+        } catch (Exception ignored) {
+            // No loopback address means no fallback; mDNS remains the path.
         }
-        return endpoint;
+        return endpoints;
+    }
+
+    private static void readLocalPorts(String path, Set<Integer> ports) {
+        try (BufferedReader reader = new BufferedReader(new FileReader(path))) {
+            String line;
+            boolean header = true;
+            while ((line = reader.readLine()) != null) {
+                if (header) {
+                    header = false;
+                    continue;
+                }
+                String[] fields = line.trim().split("\\s+");
+                if (fields.length < 4 || !"0A".equals(fields[3])) continue;
+                int colon = fields[1].lastIndexOf(':');
+                if (colon < 0) continue;
+                try {
+                    int port = Integer.parseInt(fields[1].substring(colon + 1), 16);
+                    if (port >= SCAN_PORT_START && port <= SCAN_PORT_END) ports.add(port);
+                } catch (NumberFormatException ignored) {
+                    // A malformed proc line is not a candidate.
+                }
+            }
+        } catch (Exception ignored) {
+            // /proc/net may be restricted on some builds; fall back to mDNS only.
+        }
     }
 
     private static String message(Throwable t) {
