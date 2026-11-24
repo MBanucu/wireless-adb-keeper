@@ -39,6 +39,14 @@ Output is one `ok`/`FAIL` line per check, then `PASS n <suite>` or
 `SuiteRunner` also prints `timing: <class>#main <ms> passed` per suite, the
 `test-timings` format used by android-accessible-terminal.
 
+`./gradlew probe` also runs `tools/DiagProbe.java`, the host-only redaction
+probe. It writes a fake passphrase, token and pairing code through the real
+journal append path into a temporary file and fails if any of them appears in
+the file. It needs no device and no Android runtime, because the formatting,
+retention and rotation decisions live in the pure classes the probe and the app
+share. A deliberate failure prints `redaction probe: FAIL n check(s)` and exits
+non-zero.
+
 ## The CI gate
 
 CI has one `tests` job that runs, in this order:
@@ -142,9 +150,10 @@ The identity and certificate suites are the exception to the jar-less subset:
 their classes (`AdbIdentity`, `AdbCertificate`) import `android.content.Context`
 for the device-protected storage entry points, which the suites never call.
 They need the jar to compile, like the app itself; the suites over pure classes
-(`DiagFormat`, `DiagSnapshot`, `DiagReasons`, `PermissionAudit`, `SuggestionRecord`,
-`SuggestionRegistry`, `ProfileTable`, `NetworkRows`, `Backoff`, `EnsureDecision`,
-`ControlArgs`, `Base64Codec`, `Provider`, `TermuxResult`, `VerboseLog`) do not.
+(`DiagFormat`, `DiagJournal`, `DiagRetention`, `DiagRotation`, `DiagSnapshot`,
+`DiagReasons`, `PermissionAudit`, `SuggestionRecord`, `SuggestionRegistry`,
+`ProfileTable`, `NetworkRows`, `Backoff`, `EnsureDecision`, `ControlArgs`,
+`Base64Codec`, `Provider`, `TermuxResult`, `VerboseLog`) do not.
 
 ## The device suite
 
