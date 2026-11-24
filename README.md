@@ -132,7 +132,17 @@ tools/reboot-verdict.sh check     # after it, once unlocked
 ```
 
 `check` compares `boot_id`, the diagnostics snapshot and the journal's newest
-`boot.received` section. See [`docs/reboot-verdict.md`](docs/reboot-verdict.md).
+`boot.received` section. To also prove what was reachable *before* the
+unlock, start it while the phone boots (it samples 5555, the TLS port and
+wlan0 at ~27/45/60/90 s):
+
+```bash
+tools/reboot-verdict.sh check --preunlock-wait 180
+```
+
+A pre-unlock sample that saw 5555 closed while Wi-Fi was up fails only with
+`--require-preunlock-port` (off by default). See
+[`docs/reboot-verdict.md`](docs/reboot-verdict.md).
 
 Boot completion is waited for with **one** adb round trip: the polling loop runs on
  the phone (`while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 0.1; done`),

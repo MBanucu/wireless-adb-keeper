@@ -10,6 +10,12 @@
 # The state file holds only status fields, never a passphrase or token:
 #   ${XDG_STATE_HOME:-$HOME/.local/state}/wireless-adb-keeper/reboot-verdict.state
 #
+# `check` can also sample the phone over USB while it is still locked: at ~27,
+# 45, 60 and 90 s after boot, and when sys.user.0.ce_available first turns true.
+# Those samples say whether Wi-Fi was up and 5555 was open before the unlock,
+# which the post-unlock snapshot cannot. Start `check` while the phone reboots
+# (or during the boot) with --preunlock-wait to collect them.
+#
 # Exit codes: 0 pass, 1 verdict failed, 2 usage, 3 blocked (no adb/device or no
 # recorded state).
 set -euo pipefail
@@ -22,6 +28,19 @@ TMP=$(mktemp -d) || exit 1
 trap 'rm -rf "$TMP"' EXIT
 
 MAX_START_DELAY=90
+# Seconds after boot at which the pre-unlock state is sampled over USB.
+SAMPLE_TARGETS=(27 45 60 90)
+# How long check may wait for the USB device and, after the last mark, for the
+# first unlock. 0 does not wait; a boot run passes --preunlock-wait 180.
+PREUNLOCK_WAIT=0
+REQUIRE_PREUNLOCK_PORT=0
+SAMPLE_INTERVAL=${REBOOT_VERDICT_POLL_INTERVAL:-1}
+
+if [ -n "${PHONE_SERIAL:-}" ]; then
+    ADB_TARGET=(-s "$PHONE_SERIAL")
+else
+    ADB_TARGET=()
+fi
 
 usage() {
     cat <<'USAGE'
@@ -32,6 +51,8 @@ Record and check a phone reboot with the app's boot-surviving diagnostics.
 
   tools/reboot-verdict.sh check [--state FILE] [--json] [--quiet]
                                 [--max-start-delay SECONDS]
+                                [--preunlock-wait SECONDS]
+                                [--require-preunlock-port]
       After the reboot, compare the diagnostics with the record and print a
       pass/fail verdict. --json prints one object for CI.
 
@@ -39,10 +60,26 @@ Record and check a phone reboot with the app's boot-surviving diagnostics.
                          boot marker may arrive (default: 90). A later start
                          means the app was not started by the boot broadcast.
 
+      --preunlock-wait   how long to wait for the phone over USB before sampling
+                         and, after the last sample, for the first unlock
+                         (default: 0, sample only while the phone answers).
+                         Start check while the phone reboots with a bound such
+                         as 180 to collect the 27/45/60/90 s samples.
+
+      --require-preunlock-port
+                         fail when a pre-unlock sample saw 5555 closed while
+                         Wi-Fi was up and ce_available was false. Off by
+                         default until the boot pin lands.
+
+  Pre-unlock samples (over USB) print as one line each, then
+  preunlock.wifi=up|down, preunlock.tls=<port>|none,
+  preunlock.port5555=open|closed, unlock_at_s and pin_at_s.
+
 Environment:
   REBOOT_VERDICT_STATE  state file (default: ~/.local/state/wireless-adb-keeper/reboot-verdict.state)
-  ADB, PHONE_SERIAL     forwarded to keeper.sh
+  ADB, PHONE_SERIAL     used by the diagnostics call and the USB sampling
   KEEPER                keeper.sh to use (tests point it at a fixture)
+  REBOOT_VERDICT_POLL_INTERVAL  seconds between pre-unlock samples (default: 1)
 
 Exit codes: 0 pass, 1 verdict failed, 2 usage, 3 blocked (no adb/device/state).
 USAGE
@@ -149,8 +186,313 @@ diag_to() {
     [ -s "$1" ] || blocked "the diagnostics call returned nothing"
 }
 
+field_of() {
+    # field_of <k=v k=v ...> <key>: the value, or empty when the key is absent.
+    local pair
+    for pair in $1; do
+        case "$pair" in
+            "$2="*) printf '%s' "${pair#"$2"=}"; return 0 ;;
+        esac
+    done
+    printf ''
+}
+
+adb_shell() {
+    # adb_shell <command>
+    "$ADB" "${ADB_TARGET[@]}" shell "$1" 2>/dev/null
+}
+
+listening_on() {
+    # listening_on <port> <space-separated ports>
+    local port
+    for port in $2; do
+        [ "$port" = "$1" ] && return 0
+    done
+    return 1
+}
+
+read_preunlock_state() {
+    # One USB round trip for everything the pre-unlock sample needs. The
+    # markers keep the parsing independent of adb's banner and line endings.
+    local out line
+    out=$(adb_shell '
+        echo "ce=$(getprop sys.user.0.ce_available)"
+        echo "tcp_port=$(getprop service.adb.tcp.port)"
+        echo "tls_port=$(getprop service.adb.tls.port)"
+        echo "uptime=$(cut -d. -f1 /proc/uptime)"
+        echo "kernel_boot_id=$(cat /proc/sys/kernel/random/boot_id)"
+        if command -v ip >/dev/null 2>&1; then echo ip_ok=1; else echo ip_ok=0; fi
+        ip -4 addr show wlan0 2>/dev/null |
+            sed -n "s/^ *inet \([0-9][0-9.]*\)\/.*/wlan_ip=\1/p"
+        if command -v ss >/dev/null 2>&1; then echo ss_ok=1; else echo ss_ok=0; fi
+        ss -ltn 2>/dev/null |
+            sed -n "s/.*:\([0-9][0-9]*\) .*/listen=\1/p"
+    ') || return 1
+    [ -n "$out" ] || return 1
+    PS_CE=
+    PS_TCP_PORT=
+    PS_TLS_PROP=
+    PS_UPTIME=
+    PS_KERNEL=
+    PS_IP=
+    PS_IP_OK=0
+    PS_SS_OK=0
+    PS_LISTENS=
+    while IFS= read -r line; do
+        line=${line%$'\r'}
+        case "$line" in
+            ce=*) PS_CE=${line#ce=} ;;
+            tcp_port=*) PS_TCP_PORT=${line#tcp_port=} ;;
+            tls_port=*) PS_TLS_PROP=${line#tls_port=} ;;
+            uptime=*) PS_UPTIME=${line#uptime=} ;;
+            kernel_boot_id=*) PS_KERNEL=${line#kernel_boot_id=} ;;
+            ip_ok=*) PS_IP_OK=${line#ip_ok=} ;;
+            wlan_ip=*) PS_IP=${line#wlan_ip=} ;;
+            ss_ok=*) PS_SS_OK=${line#ss_ok=} ;;
+            listen=*) PS_LISTENS="${PS_LISTENS} ${line#listen=}" ;;
+        esac
+    done <<<"$out"
+    is_seconds "$PS_UPTIME" || return 1
+    return 0
+}
+
+preunlock_tls() {
+    # preunlock_tls <ip>: sets PU_TLS_PORT / PU_TLS_PROBE.
+    #
+    # adbd's TLS port comes from service.adb.tls.port when adbd set it. When it
+    # did not, the ephemeral listeners from ss are candidates, but only a host
+    # connect proves which one is adbd. The existing adb key is what makes the
+    # connect succeed; a fresh transport is dropped again so the probe does not
+    # change the host's device list.
+    local ip=$1 candidate out seen= tried=0
+    PU_TLS_PORT=
+    PU_TLS_PROBE=skipped
+    [ -n "$ip" ] || return 0
+
+    candidate=
+    case "$PS_TLS_PROP" in
+        ''|*[!0-9]*) ;;
+        *)
+            if [ "$PS_TLS_PROP" != 0 ] && [ "$PS_TLS_PROP" != 5555 ]; then
+                candidate=$PS_TLS_PROP
+            fi
+            ;;
+    esac
+    if [ -z "$candidate" ]; then
+        local port
+        for port in $PS_LISTENS; do
+            case "$port" in
+                5555|5037) continue ;;
+            esac
+            if [ "$port" -ge 32768 ] 2>/dev/null && [ "$port" -le 60999 ]; then
+                case " $candidate " in
+                    *" $port "*) ;;
+                    *) candidate="${candidate} ${port}" ;;
+                esac
+            fi
+        done
+        [ -n "$candidate" ] &&
+            candidate=$(printf '%s\n' $candidate | head -n 3 | tr '\n' ' ')
+    fi
+    [ -n "$candidate" ] || return 0
+
+    for port in $candidate; do
+        case " $seen " in *" $port "*) continue ;; esac
+        seen="$seen $port"
+        tried=1
+        if command -v timeout >/dev/null 2>&1; then
+            out=$(timeout 5 "$ADB" connect "$ip:$port" 2>&1) || true
+        else
+            out=$("$ADB" connect "$ip:$port" 2>&1) || true
+        fi
+        case "$out" in
+            *"already connected"*)
+                PU_TLS_PORT=$port
+                PU_TLS_PROBE=ok
+                return 0
+                ;;
+            *"connected to"*)
+                PU_TLS_PORT=$port
+                PU_TLS_PROBE=ok
+                "$ADB" disconnect "$ip:$port" >/dev/null 2>&1 || true
+                return 0
+                ;;
+        esac
+    done
+    [ "$tried" = 1 ] && PU_TLS_PROBE=fail
+    return 0
+}
+
+take_preunlock_sample() {
+    # take_preunlock_sample <<t>|unlock>: one line from the current PS_* state.
+    local target=$1 at=$PS_UPTIME late=0 ce=0 wifi=down ip=- tls=- tls_probe=skipped
+    local port5555=unknown
+    is_seconds "$at" || at=0
+    if [ "$target" != unlock ] && [ "$at" -ge "$target" ]; then
+        late=$((at - target))
+    fi
+    case "$PS_CE" in true|1) ce=1 ;; esac
+    case "$PS_IP_OK" in
+        0) wifi=unknown ;;
+        *) [ -n "$PS_IP" ] && wifi=up ;;
+    esac
+    [ -n "$PS_IP" ] && ip=$PS_IP
+    if [ "$PS_SS_OK" = 1 ]; then
+        if listening_on 5555 "$PS_LISTENS"; then
+            port5555=open
+        else
+            port5555=closed
+        fi
+    fi
+    if [ "$wifi" = up ]; then
+        preunlock_tls "$PS_IP"
+        [ -n "$PU_TLS_PORT" ] && tls=$PU_TLS_PORT
+        tls_probe=$PU_TLS_PROBE
+    fi
+    PU_LINES+=("target=$target at=$at late=$late ce=$ce wifi=$wifi ip=$ip tcp_port=${PS_TCP_PORT:--} tls_port=$tls port5555=$port5555 tls_probe=$tls_probe")
+    [ "$target" = unlock ] && PU_UNLOCK_AT=$at
+    if [ "$port5555" = open ] && [ -z "$PU_PIN_AT" ]; then
+        PU_PIN_AT=$at
+    fi
+    return 0
+}
+
+sample_preunlock() {
+    # Sample the boot window over USB. PU_LINES holds one k=v line per sample;
+    # PU_REASON explains why there are none. The marks are sampled one per
+    # poll, so a late start still records the real uptime of the next mark.
+    PU_LINES=()
+    PU_REASON=
+    PU_UNLOCK_AT=
+    PU_PIN_AT=
+    PU_TLS_PORT=
+    PU_TLS_PROBE=skipped
+    local saw_locked=0 unlock_sample=0
+    local start contact marks_done now budget=$PREUNLOCK_WAIT
+    local target orig_kernel orig_uptime i
+    local -a pending=("${SAMPLE_TARGETS[@]}")
+
+    if ! command -v "$ADB" >/dev/null 2>&1; then
+        PU_REASON="adb is not available"
+        return 0
+    fi
+    orig_kernel=$(state_value kernel_boot_id)
+    orig_uptime=$(state_value uptime_s)
+    start=$(date +%s)
+    contact=
+    marks_done=
+
+    while :; do
+        if read_preunlock_state; then
+            if [ -z "$contact" ]; then
+                contact=$(date +%s)
+                # A check run before the reboot must not present the old boot
+                # as pre-unlock evidence. The kernel boot id is exact; the
+                # recorded uptime is the fallback for a state file without it.
+                if [ -n "$orig_kernel" ] && [ "$PS_KERNEL" = "$orig_kernel" ]; then
+                    PU_REASON="the kernel boot id is unchanged (${orig_kernel}); the phone has not rebooted yet"
+                    return 0
+                fi
+                if [ -z "$orig_kernel" ] && is_seconds "$orig_uptime" &&
+                        [ "$PS_UPTIME" -ge "$orig_uptime" ] && [ "$PS_UPTIME" -gt 120 ]; then
+                    PU_REASON="uptime did not drop (recorded ${orig_uptime}s, now ${PS_UPTIME}s); the phone has not rebooted yet"
+                    return 0
+                fi
+            fi
+            case "$PS_CE" in
+                true|1)
+                    if [ "$saw_locked" = 0 ]; then
+                        PU_REASON="the first sample already saw ce_available=true; the pre-unlock window was not observed"
+                        return 0
+                    fi
+                    if [ "$unlock_sample" = 0 ]; then
+                        take_preunlock_sample unlock
+                        unlock_sample=1
+                    fi
+                    PU_REASON=
+                    return 0
+                    ;;
+            esac
+            saw_locked=1
+            for i in "${!pending[@]}"; do
+                target=${pending[$i]}
+                if [ "$PS_UPTIME" -ge "$target" ]; then
+                    take_preunlock_sample "$target"
+                    unset 'pending[i]'
+                    break
+                fi
+            done
+        else
+            if [ -n "$contact" ]; then
+                PU_REASON="the phone stopped answering over USB"
+                return 0
+            fi
+            if [ $(( $(date +%s) - start )) -ge "$budget" ]; then
+                PU_REASON="no USB answer within ${budget}s"
+                return 0
+            fi
+        fi
+
+        now=$(date +%s)
+        if [ "${#pending[@]}" -eq 0 ]; then
+            [ -n "$marks_done" ] || marks_done=$now
+            # Without a wait budget the marks are the whole sample: an unlock
+            # later than the last mark is left to the journal's svc.unlocked.
+            if [ $((now - marks_done)) -ge "$budget" ]; then
+                PU_REASON="the phone stayed locked for ${budget}s after the last sample"
+                return 0
+            fi
+        fi
+        if [ $((now - start)) -ge 300 ]; then
+            PU_REASON="sampling timed out after 300s"
+            return 0
+        fi
+        sleep "$SAMPLE_INTERVAL"
+    done
+}
+
+json_string_or_null() {
+    if [ -n "$1" ]; then
+        printf '"%s"' "$(json_escape "$1")"
+    else
+        printf 'null'
+    fi
+}
+
+json_preunlock_samples() {
+    local line first=1 target at ce wifi ip tcp tls port5555 probe
+    printf '['
+    for line in "${PU_LINES[@]}"; do
+        [ "$first" = 1 ] || printf ','
+        first=0
+        target=$(field_of "$line" target)
+        at=$(field_of "$line" at)
+        ce=$(field_of "$line" ce)
+        wifi=$(field_of "$line" wifi)
+        ip=$(field_of "$line" ip)
+        [ "$ip" = - ] && ip=
+        tcp=$(field_of "$line" tcp_port)
+        [ "$tcp" = - ] && tcp=
+        tls=$(field_of "$line" tls_port)
+        [ "$tls" = - ] && tls=
+        port5555=$(field_of "$line" port5555)
+        probe=$(field_of "$line" tls_probe)
+        printf '{"target":"%s","at_s":%s,"ce_available":%s,"wifi":"%s","ip":%s,"tcp_port":%s,"tls_port":%s,"port5555":"%s","tls_probe":"%s"}' \
+            "$(json_escape "$target")" \
+            "$(json_number "$at")" \
+            "$([ "$ce" = 1 ] && echo true || echo false)" \
+            "$(json_escape "$wifi")" \
+            "$(json_string_or_null "$ip")" \
+            "$(json_number "$tcp")" \
+            "$(json_number "$tls")" \
+            "$(json_escape "$port5555")" \
+            "$(json_escape "$probe")"
+    done
+    printf ']'
+}
+
 record() {
-    local tmp err boot up events mode service wifi_mode pass held port
+    local tmp err boot up events mode service wifi_mode pass held port kernel
     tmp="$TMP/diag"
     err="$TMP/err"
 
@@ -165,6 +507,18 @@ record() {
     pass=$(snapshot_value "$tmp" wifi_passphrase)
     held=$(snapshot_value "$tmp" suggestion_held)
     port=$(snapshot_value "$tmp" port_5555)
+
+    # The kernel boot id proves a later sample is from a new boot even before
+    # the app's diagnostics are reachable. It is never a secret.
+    kernel=
+    if command -v "$ADB" >/dev/null 2>&1; then
+        kernel=$(adb_shell 'cat /proc/sys/kernel/random/boot_id' | tr -d '\r' | head -n 1) || kernel=
+    fi
+    case "$kernel" in
+        *[!0-9a-fA-F-]*) kernel= ;;
+        ?*-?*) ;;
+        *) kernel= ;;
+    esac
 
     umask 077
     mkdir -p "$(dirname "$STATE")"
@@ -181,6 +535,7 @@ record() {
         printf 'wifi_passphrase=%s\n' "$pass"
         printf 'suggestion_held=%s\n' "$held"
         printf 'port_5555=%s\n' "$port"
+        printf 'kernel_boot_id=%s\n' "$kernel"
     } >"$tmp_state"
     mv "$tmp_state" "$STATE"
 
@@ -188,6 +543,7 @@ record() {
     printf '  boot_id=%s uptime_s=%s mode=%s service=%s\n' "$boot" "$up" "$mode" "$service"
     printf '  port_5555=%s\n' "$port"
     printf 'Reboot the phone and let it unlock, then run:\n  %s check\n' "$0"
+    printf 'Or sample the pre-unlock window while it boots:\n  %s check --preunlock-wait 180\n' "$0"
 }
 
 check() {
@@ -199,15 +555,15 @@ check() {
 
     local tmp err before_boot after_boot before_up after_up checks=0 failures=0 warnings=0
     local mode after_mode service unlocked wifi_mode pass missing unreadable
-    local before_held after_held port after_boot_lines mode_line new_boot=0
-    local start_delay marker_line marker_ts marker_up marker_epoch marker_delay boot_epoch
+    local before_held after_held port after_boot_lines= mode_line new_boot=0
+    local start_delay marker_line marker_ts marker_up marker_epoch marker_delay= boot_epoch=
     local marker_ahead
     local max_start_delay=$MAX_START_DELAY verdict=pass
+    local pre_count=0 pre_wifi= pre_tls= pre_port= unlock_at= pin_at= pre_info=
     local -a failure_list=() warning_list=()
 
     tmp="$TMP/diag"
     err="$TMP/err"
-    diag_to "$tmp" "$err"
 
     ok() {
         checks=$((checks + 1))
@@ -224,6 +580,46 @@ check() {
         warning_list+=("$1: $2")
         [ "$json" = 1 ] || [ "$quiet" = 1 ] || printf 'warn %s: %s\n' "$1" "$2"
     }
+
+    # Sample before the diagnostics call: the pre-unlock window is gone by the
+    # time the app can answer, and with --preunlock-wait this waits for the
+    # first unlock, so the post-unlock checks below run on an unlocked phone.
+    sample_preunlock
+    diag_to "$tmp" "$err"
+
+    if [ "${#PU_LINES[@]}" -eq 0 ] && [ -n "$PU_REASON" ]; then
+        case "$PU_REASON" in
+            "the phone has not rebooted yet"*)
+                pre_info="no pre-unlock sample: $PU_REASON; start check after the reboot"
+                ;;
+            *)
+                pre_info="no pre-unlock sample: $PU_REASON"
+                ;;
+        esac
+        if [ "$REQUIRE_PREUNLOCK_PORT" = 1 ] || [ "$PREUNLOCK_WAIT" -gt 0 ]; then
+            warn "the pre-unlock samples are available" "$pre_info"
+        fi
+    fi
+
+    # Summarize the pre-unlock samples once; the unlock sample is kept in the
+    # list but is not evidence about the locked window.
+    if [ "${#PU_LINES[@]}" -gt 0 ]; then
+        local summary_line summary_tls
+        for summary_line in "${PU_LINES[@]}"; do
+            [ "$(field_of "$summary_line" target)" = unlock ] && continue
+            pre_count=$((pre_count + 1))
+            case "$(field_of "$summary_line" wifi)" in
+                up) pre_wifi=up ;;
+                down) [ -n "$pre_wifi" ] || pre_wifi=down ;;
+            esac
+            summary_tls=$(field_of "$summary_line" tls_port)
+            [ "$summary_tls" = - ] || pre_tls=$summary_tls
+            case "$(field_of "$summary_line" port5555)" in
+                open) pre_port=open ;;
+                closed) [ "$pre_port" = open ] || pre_port=closed ;;
+            esac
+        done
+    fi
 
     before_boot=$(state_value boot_id)
     after_boot=$(snapshot_value "$tmp" boot_id)
@@ -330,6 +726,30 @@ check() {
         listening*) ok "the pinned port is listening ($port)" ;;
         *) bad "the pinned port is listening" "port_5555='$port'" ;;
     esac
+
+    # The post-unlock snapshot cannot tell a pre-unlock pin from one that only
+    # arrived after the unlock. This opt-in check uses the USB samples for it.
+    if [ "$REQUIRE_PREUNLOCK_PORT" = 1 ]; then
+        local sample_line first_bad= samples_bad=0
+        for sample_line in "${PU_LINES[@]}"; do
+            [ "$(field_of "$sample_line" target)" = unlock ] && continue
+            [ "$(field_of "$sample_line" ce)" = 1 ] && continue
+            [ "$(field_of "$sample_line" wifi)" = up ] || continue
+            if [ "$(field_of "$sample_line" port5555)" = closed ]; then
+                [ -n "$first_bad" ] || first_bad=$sample_line
+                samples_bad=$((samples_bad + 1))
+            fi
+        done
+        if [ "$samples_bad" -gt 0 ]; then
+            bad "port 5555 is open before unlock" \
+                "closed at $(field_of "$first_bad" at)s while Wi-Fi was up and ce_available was false ($samples_bad sample(s)); the boot pin has not landed"
+        elif [ "$pre_count" -eq 0 ]; then
+            warn "port 5555 is open before unlock" \
+                "not measured: ${PU_REASON:-the pre-unlock window was not observed}"
+        else
+            ok "no pre-unlock sample saw 5555 closed while Wi-Fi was up"
+        fi
+    fi
 
     if [ "$new_boot" != 1 ]; then
         warn "the post-boot journal was checked" "skipped: no new boot"
@@ -438,9 +858,26 @@ check() {
         fi
     fi
 
+    # Timing for the two stages that matter: the first unlock and the first
+    # listening 5555. The journal is more precise than the sampling grid and
+    # also covers a run that started after the unlock.
+    unlock_at=$PU_UNLOCK_AT
+    pin_at=$PU_PIN_AT
+    if [ -n "$after_boot_lines" ]; then
+        local journal_at
+        journal_at=$(printf '%s\n' "$after_boot_lines" |
+            grep ' svc\.unlocked ' | head -n 1 | awk '{print $2}' || true)
+        journal_at=${journal_at%s}
+        is_seconds "$journal_at" && unlock_at=$journal_at
+        journal_at=$(printf '%s\n' "$after_boot_lines" |
+            grep ' pin\.state listening' | head -n 1 | awk '{print $2}' || true)
+        journal_at=${journal_at%s}
+        is_seconds "$journal_at" && pin_at=$journal_at
+    fi
+
     if [ "$json" = 1 ]; then
         [ "$failures" -eq 0 ] || verdict=fail
-        printf '{"schema":1,"ok":%s,"verdict":"%s","boot_id_before":"%s","boot_id_after":"%s","checks":%d,"failed":%d,"warnings":%d,"max_start_delay_s":%s,"start_delay_s":%s,"boot_marker_delay_s":%s,"boot_epoch":%s,"failures":%s,"warning_messages":%s}\n' \
+        printf '{"schema":1,"ok":%s,"verdict":"%s","boot_id_before":"%s","boot_id_after":"%s","checks":%d,"failed":%d,"warnings":%d,"max_start_delay_s":%s,"start_delay_s":%s,"boot_marker_delay_s":%s,"boot_epoch":%s,"preunlock_wifi":%s,"preunlock_tls":%s,"preunlock_port5555":%s,"unlock_at_s":%s,"pin_at_s":%s,"preunlock_samples":%s,"failures":%s,"warning_messages":%s}\n' \
             "$([ "$failures" -eq 0 ] && echo true || echo false)" \
             "$verdict" \
             "$(json_escape "$before_boot")" "$(json_escape "$after_boot")" \
@@ -449,9 +886,33 @@ check() {
             "$(json_number "$start_delay")" \
             "$(json_number "$marker_delay")" \
             "$(json_number "$boot_epoch")" \
+            "$(json_string_or_null "${pre_wifi:-}")" \
+            "$(json_number "${pre_tls:-}")" \
+            "$(json_string_or_null "${pre_port:-}")" \
+            "$(json_number "$unlock_at")" \
+            "$(json_number "$pin_at")" \
+            "$(json_preunlock_samples)" \
             "$(json_array "${failure_list[@]}")" \
             "$(json_array "${warning_list[@]}")"
     else
+        if [ "$json" != 1 ] && [ "$quiet" != 1 ]; then
+            if [ "${#PU_LINES[@]}" -gt 0 ]; then
+                printf 'pre-unlock samples (USB):\n'
+                local sample_line
+                for sample_line in "${PU_LINES[@]}"; do
+                    printf '  %s\n' "$sample_line"
+                done
+                if [ "$pre_count" -gt 0 ]; then
+                    printf 'preunlock.wifi=%s\n' "${pre_wifi:-unknown}"
+                    printf 'preunlock.tls=%s\n' "${pre_tls:-none}"
+                    printf 'preunlock.port5555=%s\n' "${pre_port:-unknown}"
+                fi
+            elif [ -n "$pre_info" ]; then
+                printf '%s\n' "$pre_info"
+            fi
+            [ -n "$unlock_at" ] && printf 'unlock_at_s=%s\n' "$unlock_at"
+            [ -n "$pin_at" ] && printf 'pin_at_s=%s\n' "$pin_at"
+        fi
         if [ "$failures" -gt 0 ]; then
             printf 'reboot verdict: FAIL (%d checks, %d failed, %d warnings)\n' \
                 "$checks" "$failures" "$warnings"
@@ -494,6 +955,16 @@ while [ "$#" -gt 0 ]; do
             MAX_START_DELAY=${1#*=}
             shift
             ;;
+        --preunlock-wait)
+            [ "$#" -ge 2 ] && [ -n "$2" ] || { usage 2; }
+            PREUNLOCK_WAIT=$2
+            shift 2
+            ;;
+        --preunlock-wait=*)
+            PREUNLOCK_WAIT=${1#*=}
+            shift
+            ;;
+        --require-preunlock-port) REQUIRE_PREUNLOCK_PORT=1; shift ;;
         -h|--help|help) usage 0 ;;
         *) printf 'unknown option: %s\n' "$1" >&2; usage 2 ;;
     esac
@@ -501,6 +972,14 @@ done
 
 if ! is_seconds "$MAX_START_DELAY"; then
     printf 'invalid --max-start-delay: %s\n' "$MAX_START_DELAY" >&2
+    usage 2
+fi
+if ! is_seconds "$PREUNLOCK_WAIT"; then
+    printf 'invalid --preunlock-wait: %s\n' "$PREUNLOCK_WAIT" >&2
+    usage 2
+fi
+if ! is_seconds "$SAMPLE_INTERVAL"; then
+    printf 'invalid REBOOT_VERDICT_POLL_INTERVAL: %s\n' "$SAMPLE_INTERVAL" >&2
     usage 2
 fi
 
