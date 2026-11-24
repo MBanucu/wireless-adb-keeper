@@ -1,0 +1,15 @@
+# Copy this file to local.properties on a machine where the Android SDK is not
+# found through ANDROID_HOME or ANDROID_SDK_ROOT, then edit sdk.dir. The real
+# local.properties is machine-specific, ignored by git and must never be
+# committed.
+#
+# On Termux the one-command build resolves $HOME/android-sdk and Termux's bionic
+# aapt2 itself, so this file is optional there:
+#
+#     tools/termux-build.sh assembleDebug
+#
+# Termux, with the SDK installed under the home directory:
+sdk.dir=/data/data/com.termux/files/home/android-sdk
+#
+# A desktop or CI checkout:
+# sdk.dir=/opt/android-sdk

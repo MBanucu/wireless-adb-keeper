@@ -26,7 +26,10 @@ passes the names to `SuiteRunner`. Adding a suite needs no edit here or in
 bash tests/unit.sh                 # no Gradle, no SDK needed for pure suites
 ./gradlew probeUnit                # the same script through Gradle
 ./gradlew probe                    # probeUnit plus the tools/ probes
-./gradlew check                    # probeUnit, probes and lint
+./gradlew probeBuildTooling        # wrapper hash guard + termux-build.sh's env handling
+./gradlew checkStagedManifest      # the generated manifest still has its components
+./gradlew checkDependencyPolicy    # libadb-android still has a verification checksum
+./gradlew check                    # probeUnit, probes, manifest/policy checks and lint
 
 # What CI does: run the suites, then let the gate read the log.
 mkdir -p tests/out
@@ -54,8 +57,10 @@ CI has one `tests` job that runs, in this order:
 1. `bash tests/unit.sh` on the plain JDK, before any Gradle step. This is the
    phone path: no `./gradlew`, no `build.sh`, no test framework.
 2. `bash tests/gate.sh`, which reads that log.
-3. `./gradlew probe lintDebug assembleDebug` (locally add `--offline`; CI
-   resolves the wrapper and dependencies over the network it already uses).
+3. `./gradlew checkBuildEnv probe lintDebug assembleDebug` (locally add
+   `--offline`; CI resolves the wrapper and dependencies over the network it
+   already uses). The wrapper JAR and the distribution SHA-256 are validated
+   before this step.
 
 `tests/gate.sh` prints the counts every time, not only a verdict:
 
@@ -85,8 +90,9 @@ step; `lintDebug` uses `abortOnError = true`.
 
 ### What green proves
 
-Green means every discovered JVM check passed, lint reported nothing fatal, and
-the debug APK assembled. It does **not** mean the app works on a phone: no unit
+Green means every discovered JVM check passed, the staged manifest and the
+dependency policy still hold, the build tooling accepts and rejects the right
+wrapper files, lint reported nothing fatal, and the debug APK assembled. It does **not** mean the app works on a phone: no unit
 suite can reach the real adbd, a `Context`, notifications, the activity or the
 network. Those are the manual device checks below.
 

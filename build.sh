@@ -1,6 +1,31 @@
 #!/data/data/com.termux/files/usr/bin/bash
+# build.sh -- the dependency-free bootstrap build.
+#
+# This is the on-phone path: javac, d8 and aapt only, no Gradle, no network and
+# no src-pairing. It produces wifidebug.apk, which keeps the Termux-backed
+# feature set and has no libadb-android and no pairing screen.
+#
+# Gradle is the canonical, feature-complete build (src-pairing + libadb):
+#
+#     tools/termux-build.sh
+#     # -> build-gradle/outputs/apk/debug/wireless-adb-keeper-debug.apk
+#
+# The two APKs are signed with different keys, so one cannot update the other.
+# docs/termux-build.md records the contract.
 set -e
 cd "$(dirname "$0")"
+
+need() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        echo "missing $1; install the build tools with: pkg install openjdk-21 aapt d8 apksigner" >&2
+        exit 1
+    fi
+}
+need javac
+need d8
+need aapt
+need apksigner
+need keytool
 
 echo "== cleaning =="
 rm -rf build
@@ -58,3 +83,7 @@ apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:androi
 echo "== verifying =="
 apksigner verify --verbose wifidebug.apk | head -10
 ls -lh wifidebug.apk
+
+echo "== bootstrap APK: $PWD/wifidebug.apk =="
+echo "   feature set: Termux-backed, no pairing, no Gradle dependency"
+echo "   canonical:   tools/termux-build.sh -> build-gradle/outputs/apk/debug/wireless-adb-keeper-debug.apk (adds pairing)"

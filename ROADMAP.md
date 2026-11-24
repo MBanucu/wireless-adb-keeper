@@ -12,10 +12,13 @@ Guiding constraints, in priority order:
 2. **No taps to operate.** Runtime behaviour stays automatic: monitor, re-enable,
    re-pin, Wi-Fi on. A *one-time* bootstrap tap is acceptable (see M2) — it is setup,
    not operation.
-3. **Two builds, deliberately.** `build.sh` stays the no-dependency build and keeps
-   producing the Termux-backed APK; Gradle is the only build that can carry a
-   dependency, so the Termux-free build lives there. Neither may silently become the
-   other, and the README has to say which artifact is which.
+3. **Two builds, deliberately.** Gradle is the canonical, feature-complete build
+   (`tools/termux-build.sh` → `build-gradle/outputs/apk/debug/wireless-adb-keeper-debug.apk`).
+   `build.sh` stays the no-dependency bootstrap and keeps producing the
+   Termux-backed `wifidebug.apk` when Gradle, the network or the SDK is unavailable.
+   Neither may silently become the other, and the README has to say which artifact
+   is which; [#69](https://github.com/MBanucu/wireless-adb-keeper/issues/69) and
+   [`docs/termux-build.md`](docs/termux-build.md) record the contract.
 4. **Termux stays as fallback until its replacement is measured, not assumed.**
 
 ## What actually has to be replaced
@@ -53,7 +56,10 @@ Termux support stays for those devices (or the app raises its floor).
 
 Gradle build on top of the unchanged layout (`build.gradle.kts`, wrapper 9.9.2,
 staged manifest, output in `build-gradle/`), so a declared dependency is possible
-at all. `build.sh` untouched. Both builds verified.
+at all. `build.sh` untouched. Both builds verified. The follow-up hardening in
+#69 moved versions into `gradle/libs.versions.toml`, pinned the wrapper
+distribution hash, added dependency verification, and replaced the staged-manifest
+regex with a DOM transformation and a component/permission check.
 
 *Done when:* `./gradlew assembleDebug` produces an APK with the same package,
 version and components as `build.sh`. **Met.**
