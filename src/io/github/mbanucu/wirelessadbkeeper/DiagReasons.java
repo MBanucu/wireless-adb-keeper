@@ -37,7 +37,9 @@ public final class DiagReasons {
         PROFILE_UNKNOWN("warn", "profile.unknown"),
         PROFILE_PRIORITY("warn", "profile.priority.invalid"),
         PASSPHRASE_UNSEALABLE("error", "wifi.secret.unsealable"),
-        KEY_LOAD_FAILED("error", "key.load_failed");
+        KEY_LOAD_FAILED("error", "key.load_failed"),
+        PAIRING_UNAVAILABLE("warn", "key.pair_unavailable"),
+        PAIRING_FAILED("error", "key.pair_bridge_failed");
 
         private final String level;
         private final String code;

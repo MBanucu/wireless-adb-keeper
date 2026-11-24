@@ -14,6 +14,8 @@
 #   ./keeper.sh priority ID N
 #   ./keeper.sh pin
 #   ./keeper.sh pubkey
+#   ./keeper.sh pair CODE      (6-digit code from Developer options)
+#   ./keeper.sh pair-verify    (opens shell:id over the trusted port)
 #   ./keeper.sh schedule
 #   ./keeper.sh diag    (status snapshot + recent events)
 #   ./keeper.sh autostart [LABEL]  (switch this app's DokeOS autostart row on)
@@ -38,7 +40,7 @@ call() {
 }
 
 usage() {
-    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -61,6 +63,16 @@ case "$command" in
     stop)     call --method service_stop ;;
     pin)      call --method pin_port ;;
     pubkey)   call --method pubkey ;;
+    pair)
+        # The pairing dialog has to stay open while this runs; the app finds
+        # its port over mDNS and never guesses it. The code is not echoed.
+        if [ $# -lt 1 ] || [ -z "${1:-}" ]; then
+            echo "usage: $0 pair CODE" >&2
+            exit 2
+        fi
+        call --method pair --extra "code:s:$1"
+        ;;
+    pair-verify) call --method pair_verify ;;
     schedule) call --method schedule ;;
     diag)     call --method diag ;;
     autostart)

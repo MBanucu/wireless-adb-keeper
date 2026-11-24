@@ -283,6 +283,8 @@ ring buffer, and never contains a passphrase, control token or pairing code.
 | `local.attempts_exhausted` | warn | no automatic attempt is left: the three-attempt budget is used, or every present profile was tried; the detail names the profile and the profiles tried |
 | `key.created` | info | no ADB key was present; a new one was generated, so pair again |
 | `key.load_failed` | error | the `pubkey` action could not load the key (including an unreadable file) |
+| `key.pair_unavailable` | warn | `pair`/`pair_verify` was called on the `build.sh` APK, which has no libadb; install the Gradle APK |
+| `key.pair_bridge_failed` | error | the Gradle-only pairing class could not be called or threw; the detail names the cause |
 | `key.certificate_created` | info | the self-signed certificate was created beside the key |
 | `key.certificate_regenerated` | warn | the certificate did not match the current key and was replaced; pair again |
 | `key.pair_ok` | info | pairing succeeded; the phone now trusts the app's key |
@@ -307,10 +309,16 @@ ring buffer, and never contains a passphrase, control token or pairing code.
 
 ## Secret canaries
 
+The `pair` action takes the 6-digit code as an extra and passes it only to
+`Pairing`; `pair_verify` takes no secret. Both are shell-only, like `pubkey`, and
+a token holder is refused. The code is never logged, journalled or echoed in a
+reply; a success is `paired=true` (or `connected=true`) plus the screen's
+sentence, and a failure is an `error=` line.
+
 The journal formatter scrubs `passphrase=…`, `token=…` and `pairing_code=…`
-before a line is written or logged. No action passes those values in: pairing
-state is journalled as success/failure, and a passphrase failure names only the
-feature. `DiagReasonsTest` checks the formatter with canary values,
+before a line is written or logged. No action puts those values in a journal
+detail: pairing state is journalled as success/failure, and a passphrase failure
+names only the feature. `DiagReasonsTest` checks the formatter with canary values,
 `PermissionAuditTest` checks that no audit row contains a secret-shaped value,
 and `DiagJournalTest` plus the `DiagProbe` in `./gradlew probe` write canaries
 through the real append path and assert the file contains none of them.

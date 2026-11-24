@@ -24,8 +24,8 @@ import android.util.Log;
  * app-reachable twin for the case the `content` command cannot serve.
  *
  * The reply bundle carries "code" (0 ok, 4xx/5xx error) and "data": one
- * key=value line per field for `status`, `profiles` and `pubkey`, one line for
- * everything else.
+ * key=value line per field for `status`, `profiles`, `pubkey` and `pair`,
+ * one line for everything else.
  *
  * <p>The caller gate is uid based (shell/root/system/self) with a control token
  * as the alternative for an ordinary app. {@code --method token} mints that
@@ -76,9 +76,9 @@ public class ControlProvider extends ContentProvider {
         if (method == null) {
             return new Result(400, "error=missing method; use status, enable, wifi_on, pubkey, ...");
         }
-        if (!privileged && ("token".equals(method) || "pubkey".equals(method))) {
-            // Both mint or reveal identity material. A token holder is trusted
-            // to control the keeper, not to bootstrap another copy of itself.
+        if (!privileged && shellOnly(method)) {
+            // These mint, reveal or trust identity material. A token holder is
+            // trusted to control the keeper, not to bootstrap another copy.
             Log.w(TAG, "control: refused " + caller(sender)
                     + " token=" + presented(token)
                     + " for shell-only " + method);
@@ -112,6 +112,12 @@ public class ControlProvider extends ContentProvider {
             Log.e(TAG, "control failed", t);
             return new Result(500, "error=" + t);
         }
+    }
+
+    /** The methods that must come from adb shell, root, system or the app. */
+    private static boolean shellOnly(String method) {
+        return "token".equals(method) || "pubkey".equals(method)
+                || "pair".equals(method) || "pair_verify".equals(method);
     }
 
     /** The provider has a uid; the broadcast path passes -1 and uses the token. */
@@ -167,6 +173,12 @@ public class ControlProvider extends ContentProvider {
                 return Keeper.pinPort(c);
             case PUBKEY:
                 return Keeper.pubkey(c);
+            case PAIR:
+                // The code is the one input a person has to read off the
+                // screen; it travels as an extra and is never logged.
+                return Keeper.pair(c, args.code);
+            case PAIR_VERIFY:
+                return Keeper.pairVerify(c);
             case DIAG:
                 return Diag.report(c);
             case SCHEDULE:

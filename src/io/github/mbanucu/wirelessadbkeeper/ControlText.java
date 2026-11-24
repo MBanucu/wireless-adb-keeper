@@ -49,6 +49,35 @@ public final class ControlText {
         return value.trim();
     }
 
+    /**
+     * Whether a pairing reply is a success, by the prefix the screen uses.
+     *
+     * <p>Pairing lives in {@code src-pairing}, which only the Gradle build
+     * compiles, so the rule is kept here where both the screen and the control
+     * surface can share it instead of each carrying its own string compare.
+     */
+    public static boolean pairingWorked(String reply) {
+        return reply != null
+                && (reply.startsWith("Paired") || reply.startsWith("Connected"));
+    }
+
+    /**
+     * The control-surface form of a pairing reply.
+     *
+     * <p>The pairing screen gets a sentence to read; a script needs the same
+     * {@code key=value} convention as every other action, and a failure needs
+     * to be an {@code error=} line so the provider returns a non-zero code
+     * instead of reporting a failed pairing as success.
+     */
+    public static String pairingReply(String reply, boolean verify) {
+        if (reply == null || reply.trim().isEmpty()) {
+            return "error=pairing returned no reply";
+        }
+        String line = oneLine(reply);
+        if (!pairingWorked(reply)) return "error=" + line;
+        return (verify ? "connected=true" : "paired=true") + "\nresult=" + line;
+    }
+
     /** A priority from the wire, or null when it is not a decimal integer. */
     public static Integer priority(String value) {
         if (value == null) return null;

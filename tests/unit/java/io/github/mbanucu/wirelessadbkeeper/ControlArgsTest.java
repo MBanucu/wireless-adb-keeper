@@ -85,6 +85,21 @@ public final class ControlArgsTest {
         check("save_wifi without an SSID is still the SAVE_WIFI command",
                 ControlArgs.Method.SAVE_WIFI, missingSsid.method);
 
+        ControlArgs pair = ControlArgs.of("pair", null, extras("code", "123456"));
+        check("pair is typed PAIR", ControlArgs.Method.PAIR, pair.method);
+        check("pair takes the code from the code extra", "123456", pair.code);
+        check("pair does not treat the code as an SSID", null, pair.ssid);
+        check("an extras code wins for pair", "654321",
+                ControlArgs.of("pair", "123456", extras("code", "654321")).code);
+        check("pair takes the code positionally too", "111111",
+                ControlArgs.of("pair", "111111", extras()).code);
+        check("pair without a code resolves null", null,
+                ControlArgs.of("pair", null, extras()).code);
+        ControlArgs pairVerify = ControlArgs.of("pair_verify", null, extras());
+        check("pair_verify is typed PAIR_VERIFY", ControlArgs.Method.PAIR_VERIFY,
+                pairVerify.method);
+        check("pair_verify carries no code", null, pairVerify.code);
+
         ControlArgs unknown = ControlArgs.of("frobnicate", null, extras());
         check("an unknown method is typed UNKNOWN", ControlArgs.Method.UNKNOWN, unknown.method);
         check("an unknown method is not known", false, unknown.known());

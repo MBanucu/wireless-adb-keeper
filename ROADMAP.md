@@ -103,9 +103,11 @@ transport needs stream injection, or libadb takes that path (see M3).
 
 **Status:** key storage is done and verified on the phone — `AdbIdentity` keeps the key at
 `/data/user_de/0/<pkg>/files/adb-identity/adbkey.pk8` (0600), reported by `keeper.sh pubkey`.
-The certificate and the pairing call are written and build; pairing has **not** run against
-the phone yet, so it is unverified. Reading the key across a reboot before unlock is still
-unproven.
+Pairing now works on the phone: `keeper.sh pair CODE` paired the app key and
+`keeper.sh pair-verify` returned `Connected as uid=2000(shell)` (2026-11-25). The one-time
+input path is the pairing screen or `keeper.sh pair CODE` (a `content call` action), with
+`keeper.sh pair-verify` as the shell proof. Reading the key across a reboot before unlock
+is still unproven.
 
 What exists now, and where it lives:
 
@@ -118,6 +120,9 @@ What exists now, and where it lives:
   `AdbConnection.create(...)` and `open("shell:id")`. That reply is the M2 acceptance test.
 - `src-pairing/PairActivity.java` — one screen: code field, Pair, Test connection, and a
   shortcut to Developer options. Reached from Help → Pair this phone.
+- `Keeper.pair` / `Keeper.pairVerify` — the same two calls from `content call`, with no
+  screen. They reach `src-pairing` by name so `build.sh` still compiles; `keeper.sh pair
+  CODE` and `keeper.sh pair-verify` are the wrappers, and both are shell-only.
 - `build.gradle.kts` — JitPack repository, `libadb-android:3.1.1`, `src-pairing` added to the
   Gradle source set only, and the `.PairActivity` entry injected into the staged manifest. The
   canonical manifest and `build.sh` are untouched, so the Termux APK still builds with no
@@ -168,12 +173,13 @@ connection, not the key file: the earlier wording, "`adb_keys` contains the app'
 is untestable — `/data/misc/adb/adb_keys` is unreadable from the shell uid and the app is
 not debuggable, so `run-as` cannot reach it either.
 
-*Next:* install the Gradle APK, open Help → Pair this phone while the system pairing dialog
-is up, and read the code. Until that reply arrives, "Test connection" returning
-`uid=2000(shell)` is the only thing that will close this milestone.
+*Verified (2026-11-25):* on a fresh Gradle install, with the system pairing dialog open,
+`keeper.sh pair CODE` returned `paired=true` and `keeper.sh pair-verify` returned
+`connected=true` with `uid=2000(shell)`. The pairing screen itself was verified on the
+same phone in #108. That closes the pairing half of M2.
 
 *Still unproven:* reading the key across a reboot before unlock. The `user_de` path
-proves the mechanism; no reboot test has run yet.
+proves the mechanism; no reboot test has run yet, so M2 remains open for that half.
 
 *Risk:* this is the milestone that can fail. If pairing against the phone's own
 adbd turns out to be refused by the vendor build, the fallback is explicit and
