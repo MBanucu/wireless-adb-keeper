@@ -7,6 +7,7 @@ import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
+import android.net.wifi.ScanResult;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiNetworkSpecifier;
@@ -15,6 +16,10 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
+
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 
 /**
  * Keeps a local-only Wi-Fi link to one SSID alive.
@@ -64,7 +69,13 @@ public final class LocalWifi {
     private Listener listener;
     private boolean requesting;
     private boolean started;
+    /** True after a pause; only a manual retry or a restart clears it. */
+    private boolean paused;
     private final Backoff backoff = new Backoff();
+    /** Present profiles already attempted in this cycle; a failure advances past them. */
+    private final Set<String> triedThisCycle = new LinkedHashSet<>();
+    /** The profile behind the current request or link, for the status line. */
+    private Profile linkedProfile;
     private Runnable pending;
 
     public LocalWifi(Context context) {
@@ -160,6 +171,9 @@ public final class LocalWifi {
         started = true;
         lastJournal = "";
         backoff.reset();
+        paused = false;
+        triedThisCycle.clear();
+        linkedProfile = null;
         if (!enabled(context)) {
             state = "disabled";
             detail = "";
@@ -180,6 +194,8 @@ public final class LocalWifi {
 
     public void retryNow() {
         backoff.reset();
+        paused = false;
+        triedThisCycle.clear();
         if (!started) {
             start();
             return;
@@ -193,7 +209,7 @@ public final class LocalWifi {
 
     /** Called when Android reports any Wi-Fi network becoming available. */
     public void onWifiAvailable() {
-        if (!started || network != null || requesting) return;
+        if (!started || paused || network != null || requesting) return;
         if (backoff.exhausted()) return;
         backoff.clearGap();
         request(2_000L);
@@ -205,6 +221,9 @@ public final class LocalWifi {
         releaseCallback();
         network = null;
         requesting = false;
+        paused = false;
+        triedThisCycle.clear();
+        linkedProfile = null;
         state = "off";
         detail = "";
     }
@@ -227,7 +246,7 @@ public final class LocalWifi {
     }
 
     private void connect() {
-        if (!started || requesting) return;
+        if (!started || requesting || paused) return;
 
         if (!enabled(context)) {
             state = "disabled";
@@ -251,17 +270,64 @@ public final class LocalWifi {
             return;
         }
 
-        String target = ssid(context);
         if (network != null) {
             state = "connected";
-            detail = target;
+            detail = linkDetail(linkedProfile, currentSsid());
             return;
         }
+
+        List<Profile> profiles = Profiles.list(context);
+        Set<String> scanned = scanSsids();
+        List<Profile> present = Selection.candidates(profiles, scanned);
+        if (present.size() == 1 && !backoff.exhausted()
+                && triedThisCycle.contains(present.get(0).id())) {
+            // One present network is the whole cycle: keep the old
+            // WPA2/WPA3 alternation instead of pausing after one attempt.
+            triedThisCycle.clear();
+        }
+        Selection.Choice choice = Selection.choose(
+                profiles, scanned, currentSsid(), triedThisCycle);
+        if (!choice.chosen()) {
+            if (choice.kept()) {
+                // Nothing saved is in range, but something is already connected:
+                // keeping it is better than tearing it down for an absent AP.
+                linkedProfile = choice.link();
+                state = "waiting";
+                detail = choice.link() == null
+                        ? "keeping " + currentSsid()
+                        : linkDetail(choice.link(), currentSsid()) + " (kept)";
+                if (choice.link() != null) {
+                    profileTransition(choice.link(), "kept", "info");
+                }
+                request(60_000L);
+                return;
+            }
+            if (triedThisCycle.isEmpty()) {
+                state = "no network";
+                detail = choice.tried().isEmpty()
+                        ? "no saved network; add one in the Network page"
+                        : "no saved network in range (tried " + choice.triedText() + ")";
+                journal("info", "local.no_candidate", detail);
+                request(60_000L);
+                return;
+            }
+            pauseFor(linkedProfile, "local.attempts_exhausted",
+                    "no present profile is left; tap Connect now");
+            return;
+        }
+
+        final Profile targetProfile = choice.profile();
+        final String target = targetProfile.ssid();
+        final String profileLabel = Selection.label(targetProfile);
+        linkedProfile = targetProfile;
+
         // A local-only request cannot match a network that the saved profile has
         // already connected with internet capability: the system searches forever.
         if (target.equals(currentSsid())) {
             state = "own network";
-            detail = "saved network, turn off auto-connect";
+            detail = linkDetail(targetProfile, currentSsid())
+                    + " (saved network, turn off auto-connect)";
+            profileTransition(targetProfile, "own network", "info");
             request(60_000L);
             return;
         }
@@ -272,14 +338,16 @@ public final class LocalWifi {
             return;
         }
 
-        String pass = passphrase(context);
+        String pass = Profiles.secret(context, targetProfile.id());
         if (pass == null) {
             // Null means the Keystore could not decrypt a stored secret; an
             // absent secret is the empty string. Do not turn that failure into
             // an open-network request for a network that needs a password.
             state = "error";
-            detail = "saved passphrase cannot be decrypted; save it again";
-            journal("warn", "wifi.secret.undecryptable", detail);
+            detail = linkDetail(targetProfile, null)
+                    + ": saved passphrase cannot be decrypted; save it again";
+            journal("warn", "wifi.secret.undecryptable", "id=" + targetProfile.id()
+                    + " ssid=" + target + ": the stored passphrase cannot be decrypted");
             return;
         }
         cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
@@ -292,7 +360,7 @@ public final class LocalWifi {
 
         WifiNetworkSpecifier.Builder specBuilder = new WifiNetworkSpecifier.Builder()
                 .setSsid(target);
-        if (pass != null && !pass.isEmpty()) {
+        if (!pass.isEmpty()) {
             // Some APs advertise both wpa2-psk and wpa3-sae; alternate on retries.
             if (useWpa3) {
                 specBuilder.setWpa3Passphrase(pass);
@@ -306,20 +374,24 @@ public final class LocalWifi {
                 .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                 .setNetworkSpecifier(specifier)
                 .build();
-        final String security = (pass == null || pass.isEmpty())
+        final String security = (pass.isEmpty())
                 ? "open" : (useWpa3 ? "wpa3" : "wpa2");
 
         final ConnectivityManager.NetworkCallback cb = new ConnectivityManager.NetworkCallback() {
             @Override
             public void onAvailable(Network n) {
                 if (callback != this) return;
-                Diag.verbose(context, VerboseLog.NETWORK, "local link available: " + target);
+                Diag.verbose(context, VerboseLog.NETWORK, "local link available: " + profileLabel);
                 network = n;
                 requesting = false;
+                paused = false;
                 backoff.success();
+                triedThisCycle.clear();
+                linkedProfile = targetProfile;
                 state = "connected";
-                detail = target;
-                Log.i(Ensurer.TAG, "local wifi connected: " + target);
+                detail = linkDetail(targetProfile, target);
+                profileTransition(targetProfile, "connected", "info");
+                Log.i(Ensurer.TAG, "local wifi connected: " + profileLabel);
                 Log.i(Ensurer.TAG, "local wifi security used: " + security);
                 NetworkCapabilities caps = cm == null ? null : cm.getNetworkCapabilities(n);
                 if (caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
@@ -332,14 +404,16 @@ public final class LocalWifi {
             @Override
             public void onLost(Network n) {
                 if (callback != this) return;
-                Diag.verbose(context, VerboseLog.NETWORK, "local link lost: " + target);
+                Diag.verbose(context, VerboseLog.NETWORK, "local link lost: " + profileLabel);
                 network = null;
                 requesting = false;
+                linkedProfile = targetProfile;
                 state = "lost";
-                detail = target;
-                Log.i(Ensurer.TAG, "local wifi lost: " + target);
+                detail = linkDetail(targetProfile, target);
+                profileTransition(targetProfile, "lost", "warn");
+                Log.i(Ensurer.TAG, "local wifi lost: " + profileLabel);
                 releaseCallback();
-                if (started && !backoff.exhausted()) {
+                if (started && !paused && !backoff.exhausted()) {
                     request(RECONNECT_DELAY_MS);
                 }
             }
@@ -348,43 +422,41 @@ public final class LocalWifi {
             public void onUnavailable() {
                 if (callback != this) return;
                 Diag.verbose(context, VerboseLog.NETWORK, "local link unavailable (attempt "
-                        + backoff.attempts() + ", " + security + "): " + target);
+                        + backoff.attempts() + ", " + security + "): " + profileLabel);
                 requesting = false;
                 backoff.failed();
                 useWpa3 = !useWpa3;
                 releaseCallback();
+                profileTransition(targetProfile, "failed", "warn");
                 Log.w(Ensurer.TAG, "local wifi unavailable (attempt " + backoff.attempts()
-                        + ", " + security + "): " + target);
+                        + ", " + security + "): " + profileLabel);
                 if (backoff.exhausted()) {
-                    state = "paused";
-                    detail = "approve in dialog or tap Connect now";
-                    Log.w(Ensurer.TAG, "local wifi: pausing after " + backoff.attempts()
-                            + " attempts");
-                    journal("warn", "local.attempts_exhausted",
-                            "no approval after " + backoff.attempts()
-                                    + " attempts for " + target
-                                    + "; approve in the dialog or tap Connect now");
+                    pauseFor(targetProfile, "local.attempts_exhausted",
+                            "approve in the dialog or tap Connect now");
                     return;
                 }
                 state = "requesting";
-                detail = "waiting for approval";
+                detail = linkDetail(targetProfile, target) + " (no approval)";
                 journal("warn", "local.dialog_timeout",
-                        "the approval dialog timed out for " + target
-                                + " (attempt " + backoff.attempts() + ")");
+                        "the approval dialog timed out for id=" + targetProfile.id()
+                                + " ssid=" + target + " (attempt " + backoff.attempts() + ")");
                 request(backoff.retryDelayMs());
             }
         };
 
         requesting = true;
         backoff.attempted(SystemClock.elapsedRealtime());
+        triedThisCycle.add(targetProfile.id());
         callback = cb;
         state = "requesting";
-        detail = target;
+        detail = linkDetail(targetProfile, target);
+        profileTransition(targetProfile, "requesting", "info");
         try {
             cm.requestNetwork(request, cb, (int) REQUEST_TIMEOUT_MS);
-            Log.i(Ensurer.TAG, "local wifi: requested local-only link to " + target);
+            Log.i(Ensurer.TAG, "local wifi: requested local-only link to " + profileLabel);
         } catch (SecurityException e) {
             requesting = false;
+            triedThisCycle.remove(targetProfile.id());
             releaseCallback();
             state = "error";
             detail = "permission denied";
@@ -393,13 +465,84 @@ public final class LocalWifi {
                     "the local-only request was refused: " + e);
         } catch (Exception e) {
             requesting = false;
+            triedThisCycle.remove(targetProfile.id());
             releaseCallback();
             state = "error";
             detail = String.valueOf(e.getMessage());
             Log.e(Ensurer.TAG, "local wifi request failed", e);
             journal("error", "local.request_failed",
-                    "the local-only request failed for " + target + ": " + e);
+                    "the local-only request failed for " + profileLabel + ": " + e);
         }
+    }
+
+    /** `local link: lab (p2)`, with the current SSID when no profile matches. */
+    private static String linkDetail(Profile profile, String fallbackSsid) {
+        if (profile != null) return "local link: " + Selection.label(profile);
+        if (fallbackSsid == null || fallbackSsid.isEmpty()) return "local link";
+        return "local link: " + fallbackSsid;
+    }
+
+    /** One coded event per profile transition; never carries the passphrase. */
+    private void profileTransition(Profile profile, String transition, String level) {
+        if (profile == null) return;
+        journal(level, "local.profile", "id=" + profile.id() + " ssid=" + profile.ssid()
+                + " state=" + transition);
+    }
+
+    /** Pauses the automatic cycle with the profile and the reason in the status. */
+    private void pauseFor(Profile profile, String code, String reason) {
+        paused = true;
+        state = "paused";
+        detail = linkDetail(profile, null) + ": " + reason;
+        String tried = triedText();
+        journal("warn", code, (profile == null ? ""
+                : "id=" + profile.id() + " ssid=" + profile.ssid() + ": ")
+                + reason + (tried.isEmpty() ? "" : "; tried " + tried));
+        Log.w(Ensurer.TAG, "local wifi: paused after " + backoff.attempts()
+                + " attempts; " + reason);
+    }
+
+    /** The ids attempted this cycle as `ssid (id)`, for a pause or a journal. */
+    private String triedText() {
+        StringBuilder out = new StringBuilder();
+        if (triedThisCycle.isEmpty()) return "";
+        for (Profile profile : Profiles.list(context)) {
+            if (!triedThisCycle.contains(profile.id())) continue;
+            if (out.length() > 0) out.append(", ");
+            out.append(Selection.label(profile));
+        }
+        if (out.length() == 0) {
+            for (String id : triedThisCycle) {
+                if (out.length() > 0) out.append(", ");
+                out.append(id);
+            }
+        }
+        return out.toString();
+    }
+
+    /** The scan results, or an empty set when the query is unavailable. */
+    @SuppressWarnings("deprecation")
+    private Set<String> scanSsids() {
+        Set<String> ssids = new LinkedHashSet<>();
+        if (context.checkSelfPermission(PERM_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            return ssids;
+        }
+        try {
+            WifiManager wm = (WifiManager) context.getApplicationContext()
+                    .getSystemService(Context.WIFI_SERVICE);
+            if (wm == null) return ssids;
+            List<ScanResult> results = wm.getScanResults();
+            if (results == null) return ssids;
+            for (ScanResult result : results) {
+                if (result != null && result.SSID != null && !result.SSID.isEmpty()) {
+                    ssids.add(result.SSID);
+                }
+            }
+        } catch (Exception e) {
+            Log.w(Ensurer.TAG, "local wifi: scan results unavailable: " + e);
+        }
+        return ssids;
     }
 
     private boolean useWpa3 = true;
