@@ -67,6 +67,17 @@ iso_epoch() {
     date -u -d "$1" +%s 2>/dev/null || true
 }
 
+marker_delay_of() {
+    # marker_delay_of <post-boot journal lines>: the first boot.received ran
+    # this many seconds after boot, or nothing when there is no usable marker.
+    local line up
+    line=$(printf '%s\n' "$1" | grep ' boot\.received ' | head -n 1 || true)
+    [ -n "$line" ] || return 0
+    up=$(printf '%s\n' "$line" | awk '{print $2}')
+    up=${up%s}
+    is_seconds "$up" && printf '%s' "$up"
+}
+
 snapshot_value() {
     # snapshot_value <diag-file> <key>
     awk -v key="$2" '
@@ -190,6 +201,7 @@ check() {
     local mode after_mode service unlocked wifi_mode pass missing unreadable
     local before_held after_held port after_boot_lines mode_line new_boot=0
     local start_delay marker_line marker_ts marker_up marker_epoch marker_delay boot_epoch
+    local marker_ahead
     local max_start_delay=$MAX_START_DELAY verdict=pass
     local -a failure_list=() warning_list=()
 
@@ -255,6 +267,12 @@ check() {
     # boot_id, service and journal content cannot tell a boot start from a
     # manual one. The process start delay is the missing fact.
     start_delay=$(snapshot_value "$tmp" process_started_after_boot_s)
+    # A late process is only evidence of a blocked boot when the journal does
+    # not already show the broadcast arriving at boot: after an on-time marker
+    # the app did start at boot, and a late process is a later restart (a
+    # force-stop, a crash, a reinstall or Doze), not a refused boot gate.
+    marker_ahead=$(marker_delay_of \
+        "$(boot_section "$tmp" "$(state_value recorded_at)" 2>/dev/null || true)")
     if [ "$new_boot" != 1 ]; then
         warn "the process started near boot" "skipped: no new boot"
     elif ! is_seconds "$start_delay"; then
@@ -262,6 +280,9 @@ check() {
             "process_started_after_boot_s='$start_delay'"
     elif [ "$start_delay" -le "$max_start_delay" ]; then
         ok "the process started ${start_delay}s after boot (limit ${max_start_delay}s)"
+    elif [ -n "$marker_ahead" ] && [ "$marker_ahead" -le "$max_start_delay" ]; then
+        warn "the process was restarted after boot" \
+            "the first boot marker arrived ${marker_ahead}s after boot, so the boot broadcast did start the app; the process now running started ${start_delay}s after boot (a force-stop, a crash, a reinstall or Doze). Not an autostart-gate failure."
     else
         bad "the process started near boot" \
             "process_started_after_boot_s=${start_delay}s is over the ${max_start_delay}s limit (unlocked=$unlocked). The system boot broadcast starts the app; a start this late was probably the user opening it. Allow the app in DokeOS Auto Start Management and exempt it from Doze/battery optimization."

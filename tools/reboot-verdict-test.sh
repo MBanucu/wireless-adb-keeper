@@ -204,6 +204,18 @@ contains "after unlock" "the locked boot names the unlock state"
 expect 0 "the start-delay bound is overridable" \
     check "$TMP/late-start" "$STATE" --max-start-delay 300
 
+# A non-numeric bound is documented as a usage error, so it is checked here.
+expect 2 "a non-numeric start-delay bound is a usage error" \
+    check "$TMP/late-start" "$STATE" --max-start-delay abc
+
+# A process that restarted long after an on-time marker is not a blocked boot:
+# the journal already proves the broadcast arrived at boot, so the gate is fine.
+boot_fixture "$TMP/restarted" 27 240 'before unlock'
+expect 0 "a restarted process after an on-time marker passes" \
+    check "$TMP/restarted" "$STATE"
+contains 'restarted after boot' "the restart is reported as the reason"
+contains 'Not an autostart-gate failure' "the restart does not blame the boot gate"
+
 expect 0 "a passing verdict is machine-readable" check "$POST" "$STATE" --json
 python3 - "$TMP/out" <<'PY'
 import json

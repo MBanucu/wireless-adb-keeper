@@ -81,6 +81,12 @@ tools/reboot-verdict.sh check --max-start-delay 150
 The same bound applies to the process start and to the first boot marker. A
 non-numeric value is a usage error (exit 2).
 
+A late process start fails only when the journal has no on-time marker to
+contradict it. When the first `boot.received` did arrive inside the bound, the
+broadcast started the app and a late `process_started_after_boot_s` is a
+*restart* — a force-stop, a crash, a reinstall or Doze — so it is reported as a
+warning that says so, not as an autostart-gate failure.
+
 ## Machine-readable verdict
 
 ```bash
