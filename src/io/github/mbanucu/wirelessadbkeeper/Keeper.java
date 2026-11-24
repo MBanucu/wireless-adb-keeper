@@ -8,6 +8,7 @@ import android.content.Intent;
 import android.os.Build;
 
 import java.io.File;
+import java.lang.reflect.InvocationTargetException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,6 +20,9 @@ import java.util.Map;
  * `am broadcast` from adb do exactly the same thing instead of drifting apart.
  */
 public final class Keeper {
+    /** The Gradle-only pairing class, reached by name so build.sh still links. */
+    private static final String PAIRING_CLASS = "io.github.mbanucu.wirelessadbkeeper.Pairing";
+
     private Keeper() {}
 
     /** Re-applies wireless debugging now; safe to call at any time. */
@@ -267,6 +271,53 @@ public final class Keeper {
             return fail(c, DiagReasons.Failure.KEY_LOAD_FAILED,
                     "could not load the ADB key: " + e.getMessage());
         }
+    }
+
+    /**
+     * Pairs with this phone using the 6-digit code the system dialog shows.
+     *
+     * <p>Pairing needs libadb, which only the Gradle build carries. Reaching it
+     * by name is what keeps `build.sh` compiling this file without
+     * {@code src-pairing}: that APK reports the honest "not in this build"
+     * instead of failing to link.
+     */
+    public static String pair(Context c, String code) {
+        return pairing(c, false, code);
+    }
+
+    /**
+     * Opens {@code shell:id} over the trusted wireless-debugging port. This is
+     * the proof that pairing took: adbd only answers a key it stored.
+     */
+    public static String pairVerify(Context c) {
+        return pairing(c, true, null);
+    }
+
+    private static String pairing(Context c, boolean verify, String code) {
+        try {
+            Class<?> pairing = Class.forName(PAIRING_CLASS);
+            Object reply = verify
+                    ? pairing.getMethod("verify", Context.class).invoke(null, c)
+                    : pairing.getMethod("pair", Context.class, String.class)
+                            .invoke(null, c, code);
+            return ControlText.pairingReply(reply == null ? null : reply.toString(), verify);
+        } catch (ClassNotFoundException | NoSuchMethodException e) {
+            return fail(c, DiagReasons.Failure.PAIRING_UNAVAILABLE,
+                    "pairing is only in the Gradle build; install"
+                            + " build-gradle/outputs/apk/debug/wireless-adb-keeper-debug.apk");
+        } catch (InvocationTargetException e) {
+            Throwable cause = e.getCause() == null ? e : e.getCause();
+            return fail(c, DiagReasons.Failure.PAIRING_FAILED,
+                    "pairing failed: " + message(cause));
+        } catch (ReflectiveOperationException e) {
+            return fail(c, DiagReasons.Failure.PAIRING_FAILED,
+                    "could not call pairing: " + message(e));
+        }
+    }
+
+    private static String message(Throwable t) {
+        String text = t.getMessage();
+        return text == null || text.isEmpty() ? t.getClass().getSimpleName() : text;
     }
 
     /** Registers the 15-minute JobScheduler fallback. */

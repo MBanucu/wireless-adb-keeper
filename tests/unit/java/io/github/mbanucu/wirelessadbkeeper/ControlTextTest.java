@@ -55,6 +55,35 @@ public final class ControlTextTest {
         check("an empty security means auto", "auto", ControlText.security(""));
         check("a missing security means auto", "auto", ControlText.security(null));
 
+        check("a paired reply is a key=value success",
+                "paired=true\nresult=Paired. The app's key is now trusted by this phone.",
+                ControlText.pairingReply(
+                        "Paired. The app's key is now trusted by this phone.", false));
+        check("a connected reply is a key=value success",
+                "connected=true\nresult=Connected as uid=2000(shell)",
+                ControlText.pairingReply("Connected as uid=2000(shell)", true));
+        check("an unpaired reply is an error line, not a false code 0",
+                "error=Pairing failed: wrong code",
+                ControlText.pairingReply("Pairing failed: wrong code", false));
+        check("a verify failure is an error line",
+                "error=No connection yet: the phone does not trust this app's key",
+                ControlText.pairingReply(
+                        "No connection yet: the phone does not trust this app's key", true));
+        check("an empty pairing reply is an error", "error=pairing returned no reply",
+                ControlText.pairingReply("", false));
+        check("a null pairing reply is an error", "error=pairing returned no reply",
+                ControlText.pairingReply(null, false));
+        check("a multi-line pairing reply stays one line",
+                "error=Pairing failed: one two",
+                ControlText.pairingReply("Pairing failed: one\ntwo", false));
+        checkTrue("a paired reply is recognised as success",
+                ControlText.pairingWorked("Paired. The app's key is now trusted by this phone."));
+        checkTrue("a connected reply is recognised as success",
+                ControlText.pairingWorked("Connected as uid=2000(shell)"));
+        checkTrue("a failure is not success",
+                !ControlText.pairingWorked("No connection yet: timeout"));
+        checkTrue("a null reply is not success", !ControlText.pairingWorked(null));
+
         report("ControlTextTest");
     }
 

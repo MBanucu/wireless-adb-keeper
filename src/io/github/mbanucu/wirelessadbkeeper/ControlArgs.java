@@ -5,9 +5,10 @@ package io.github.mbanucu.wirelessadbkeeper;
  * Bundle.
  *
  * <p>The positional value means the SSID for {@code save_wifi}, the mode for
- * {@code set_mode} and the profile id for {@code remove_profile} and
- * {@code set_priority}; the password, the explicit save id and the priority only
- * travel as named extras. Reading the mode only from extras made
+ * {@code set_mode}, the profile id for {@code remove_profile} and
+ * {@code set_priority}, and the 6-digit code for {@code pair}; the password,
+ * the explicit save id, the priority and the pairing code also travel as named
+ * extras. Reading the mode only from extras made
  * {@code keeper.sh mode local} pass null, and {@link Keeper#setMode} treats null
  * as "toggle" - so asking for the mode it was already in switched to the other
  * one. The fallback below is the rule that fixes that, and it is tested as the
@@ -36,6 +37,8 @@ public final class ControlArgs {
         SET_PRIORITY,
         PIN_PORT,
         PUBKEY,
+        PAIR,
+        PAIR_VERIFY,
         DIAG,
         SCHEDULE,
         AUTOSTART,
@@ -58,6 +61,8 @@ public final class ControlArgs {
                 case "set_priority": return SET_PRIORITY;
                 case "pin_port": return PIN_PORT;
                 case "pubkey": return PUBKEY;
+                case "pair": return PAIR;
+                case "pair_verify": return PAIR_VERIFY;
                 case "diag": return DIAG;
                 case "schedule": return SCHEDULE;
                 case "autostart": return AUTOSTART;
@@ -79,9 +84,11 @@ public final class ControlArgs {
     public final String priority;
     /** The row to switch in the vendor list for {@code autostart}; null means this app. */
     public final String label;
+    /** The 6-digit code for {@code pair}; never logged or journalled. */
+    public final String code;
 
     private ControlArgs(String name, Method method, String mode, String ssid, String passphrase,
-                        String id, String priority, String label) {
+                        String id, String priority, String label, String code) {
         this.name = name;
         this.method = method;
         this.mode = mode;
@@ -90,6 +97,7 @@ public final class ControlArgs {
         this.id = id;
         this.priority = priority;
         this.label = label;
+        this.code = code;
     }
 
     /**
@@ -113,7 +121,12 @@ public final class ControlArgs {
         // autostart is the only command whose positional value is a label, and
         // an empty one means "this app", so null is the useful default.
         String label = extraLabel != null || resolved != Method.AUTOSTART ? extraLabel : arg;
-        return new ControlArgs(method, resolved, mode, ssid, passphrase, id, priority, label);
+        String extraCode = extras == null ? null : extras.get("code");
+        // The code is a secret, so keep it in one field and let Pairing run the
+        // six-digit validation; `keeper.sh pair CODE` is the positional form.
+        String code = extraCode != null || resolved != Method.PAIR ? extraCode : arg;
+        return new ControlArgs(method, resolved, mode, ssid, passphrase, id, priority, label,
+                code);
     }
 
     public boolean known() {

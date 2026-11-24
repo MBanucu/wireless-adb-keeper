@@ -366,13 +366,22 @@ and no pairing screen. The extra `<activity>` for the pairing screen is added to
 the staged manifest by a DOM transformation, not to the canonical manifest, and
 `checkStagedManifest` verifies it is there.
 
-The one-time setup, for the canonical Gradle build only:
+The one-time setup, for the canonical Gradle build only. In Developer options,
+open **Wireless debugging** → **Pair device with pairing code** and leave that
+dialog up — the port it advertises exists only while it is open. Then either:
 
-1. Open the app → **Help** → **Pair this phone**.
-2. In Developer options, open **Wireless debugging** → **Pair device with
-   pairing code** and leave that dialog up — the port it advertises exists only
-   while it is open.
-3. Type the 6-digit code into the app and tap **Pair**.
+1. Open the app → **Help** → **Pair this phone**, type the 6-digit code and tap
+   **Pair**; or
+2. From adb, with the dialog still open:
+
+   ```bash
+   ./keeper.sh pair 123456       # the code from the dialog
+   ./keeper.sh pair-verify       # proves it: uid=2000(shell)
+   ```
+
+   The raw form is `content call --method pair --extra code:s:123456` and
+   `--method pair_verify`. Both are shell-only, like `pubkey`: they handle
+   identity material, so a control token cannot call them.
 
 The exported pairing screen can also be driven from adb. `pair_host` and
 `pair_port` are optional; without them the app discovers the pairing port over
@@ -400,9 +409,10 @@ tag (`adb logcat -s WirelessAdbKeeper`).
 device-protected storage (built as DER by hand, so `src/` needs no BouncyCastle;
 `keytool -printcert` reads it back as v3, SHA256withRSA, 2048-bit,
 `digitalSignature`, not a CA). The pairing port comes from mDNS
-(`_adb-tls-pairing._tcp`). **Test connection** then opens `shell:id` over the
-trusted TLS port — that, not the key file, is the proof: adbd only answers a key
-it has stored, and `/data/misc/adb/adb_keys` is unreadable to this app anyway.
+(`_adb-tls-pairing._tcp`). **Test connection** (or `./keeper.sh pair-verify`)
+then opens `shell:id` over the trusted TLS port — that, not the key file, is the
+proof: adbd only answers a key it has stored, and `/data/misc/adb/adb_keys` is
+unreadable to this app anyway.
 
 ### Pair from Termux, no laptop
 
@@ -584,6 +594,8 @@ force-stopped or only just installed, which a broadcast cannot do.
 ./keeper.sh priority ID N     # move a profile in the try order (1 is first)
 ./keeper.sh pin               # Pin adb port 5555 now
 ./keeper.sh pubkey            # the app's own ADB public key
+./keeper.sh pair CODE         # pair with the code Developer options shows
+./keeper.sh pair-verify       # open shell:id over the trusted port
 ./keeper.sh schedule          # 15-minute keep-alive job
 ./keeper.sh diag              # status snapshot + recent events
 ```
@@ -692,9 +704,10 @@ The token is a capability, not a package check: any process that can read the
 600 file can drive the app, and no other app can. That is deliberate — it
 survives a Termux reinstall and works with a Termux fork whose package id is
 different. Root, adb shell and the app itself keep working without it, so the
-existing `adb shell` path is unchanged. `start`, `pin`, `pubkey` and `token`
-still need adb; they do something an app uid cannot (start another app's
-foreground service, run `adb tcpip`, or handle key material).
+existing `adb shell` path is unchanged. `start`, `pin`, `pubkey`, `pair`,
+`pair-verify` and `token` still need adb; they do something an app uid cannot
+(start another app's foreground service, run `adb tcpip`, or handle identity
+material).
 
 A force-stopped app receives no broadcasts. If `keeperctl.sh` reports no reply,
 run `./keeper.sh status` once (the provider starts the app) or open it; the

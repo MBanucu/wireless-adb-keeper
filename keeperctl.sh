@@ -173,9 +173,10 @@ case "$command" in
         fi
         call set_priority --es arg "$1" --es priority "$2"
         ;;
-    start|pin|pubkey|token)
+    start|pin|pubkey|pair|pair-verify|token)
         # These need adb for something an app uid cannot do: start another
-        # app's foreground service, run `adb tcpip`, or ask for key material.
+        # app's foreground service, run `adb tcpip`, or handle identity
+        # material (the key, the token, or a pairing code).
         echo "$command needs the adb shell; use ./keeper.sh $command" >&2
         exit 2
         ;;

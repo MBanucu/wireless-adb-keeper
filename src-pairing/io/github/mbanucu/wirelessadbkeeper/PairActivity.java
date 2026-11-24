@@ -231,8 +231,7 @@ public class PairActivity extends Activity {
                     @Override
                     public void run() {
                         try {
-                            boolean good = result.startsWith("Paired")
-                                    || result.startsWith("Connected");
+                            boolean good = ControlText.pairingWorked(result);
                             show(result, good ? OK : BAD);
                         } finally {
                             pairButton.setEnabled(true);
