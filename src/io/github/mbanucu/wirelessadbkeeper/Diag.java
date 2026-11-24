@@ -13,6 +13,7 @@ import android.util.Log;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * The app's own record of what happened, readable on the phone.
@@ -187,6 +188,7 @@ public final class Diag {
                 () -> String.valueOf(SystemClock.elapsedRealtime() / 1000)));
         fields.add(new DiagSnapshot.Field("process_started_after_boot_s",
                 () -> String.valueOf(Process.getStartElapsedRealtime() / 1000)));
+        fields.add(new DiagSnapshot.Field("oem.autostart", () -> oemAutostart(c)));
         fields.add(new DiagSnapshot.Field("unlocked", () -> String.valueOf(unlocked(c))));
         fields.add(new DiagSnapshot.Field("mode", () -> LocalWifi.mode(c)));
         fields.add(new DiagSnapshot.Field("service",
@@ -280,6 +282,30 @@ public final class Diag {
             }
         }
         return NetworkRows.passwordSummary(saved, missing, unreadable);
+    }
+
+    /**
+     * Whether the ROM let this package start at boot, from this boot's journal.
+     * The vendor list itself is behind a signature permission, so the answer
+     * names the evidence or says unknown; it never claims the list was read.
+     */
+    private static String oemAutostart(Context c) {
+        long uptime = SystemClock.elapsedRealtime() / 1000;
+        return OemAutostart.classify(new OemAutostart.Inputs(
+                dokeos(c), journal(c), System.currentTimeMillis(), uptime,
+                Process.getStartElapsedRealtime() / 1000)).line();
+    }
+
+    /** DokeOS detection without the vendor list: the ROM's own manager. */
+    private static boolean dokeos(Context c) {
+        String maker = (Build.MANUFACTURER + " " + Build.BRAND).toLowerCase(Locale.US);
+        if (maker.contains("blackview") || maker.contains("doogee")) return true;
+        try {
+            c.getPackageManager().getPackageInfo("com.blackview.systemmanager", 0);
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     private static boolean granted(Context c, String name) {

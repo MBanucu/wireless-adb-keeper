@@ -3,6 +3,7 @@
 #
 #   ./install.sh                      # canonical Gradle APK, else wifidebug.apk
 #   ./install.sh path/to/app.apk
+#   ./install.sh --autostart          # also enable the DokeOS autostart row
 #   PHONE_SERIAL=192.168.77.232:5555 ./install.sh
 #
 # With no argument the canonical build wins: the Gradle debug APK at
@@ -18,11 +19,45 @@
 # pin adbd to port 5555 — which is the moment you have no cable and need it
 # most. So the grants live here, next to the install, instead of in a README
 # nobody re-reads.
+#
+# DokeOS adds a second prerequisite that no grant can satisfy: the vendor
+# autostart list decides whether the package may receive boot broadcasts at all.
+# The install always prints the screen; --autostart drives it with
+# autostart-allow.sh, and only on a phone that is already unlocked.
 set -uo pipefail
 
-APK=${1:-}
+here=$(cd "$(dirname "$0")" && pwd)
+APK=""
+ALLOW_AUTOSTART=0
 SERIAL=${PHONE_SERIAL:-}
 PKG=io.github.mbanucu.wirelessadbkeeper
+LABEL="Wireless ADB Keeper"
+MANAGER=com.blackview.systemmanager
+
+usage() {
+    cat <<'USAGE'
+install.sh -- install the app and hand it the grants it cannot ask for.
+
+  ./install.sh                      # canonical Gradle APK, else wifidebug.apk
+  ./install.sh path/to/app.apk
+  ./install.sh --autostart          # also enable the DokeOS autostart row
+  PHONE_SERIAL=192.168.77.232:5555 ./install.sh
+USAGE
+    exit "${1:-0}"
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --autostart) ALLOW_AUTOSTART=1 ;;
+        -h|--help) usage 0 ;;
+        -*) echo "unknown option: $1" >&2; usage 2 ;;
+        *)
+            [ -z "$APK" ] || { echo "only one APK path is accepted" >&2; usage 2; }
+            APK=$1
+            ;;
+    esac
+    shift
+done
 
 if [ -z "$APK" ]; then
     for candidate in \
@@ -74,6 +109,32 @@ done
 d shell dumpsys package "$PKG" 2>/dev/null \
     | grep -E 'com\.termux\.permission\.RUN_COMMAND|WRITE_SECURE_SETTINGS' \
     | grep -E 'granted=' | sed 's/^ *//' || true
+
+# The vendor gate is independent of every grant above. It is printed even
+# without --autostart, because a reboot is the only way to notice it.
+if d shell pm list packages 2>/dev/null | grep -qx "package:$MANAGER" \
+    || [ "$(d shell getprop ro.blackview.autostart_manager 2>/dev/null)" = "1" ]; then
+    echo
+    echo "DokeOS autostart prerequisite (issue #93):"
+    echo "  System Manager > App Management > Auto Start Management -> allow \"$LABEL\""
+    echo "  Without it the boot broadcasts reach the app only after you open it by hand,"
+    echo "  and the monitor and port 5555 wait for that launch."
+    if [ "$ALLOW_AUTOSTART" = 1 ]; then
+        if d shell dumpsys user 2>/dev/null | grep -q 'RUNNING_UNLOCKED'; then
+            if "$here/autostart-allow.sh" --serial "$SERIAL" "$LABEL"; then
+                echo "  autostart allowed; verify with ./keeper.sh diag | grep oem.autostart"
+            else
+                echo "autostart was not enabled; open the screen above by hand" >&2
+                exit 1
+            fi
+        else
+            echo "  not driving the screen now: the phone is locked." >&2
+            echo "  unlock it and run: ./autostart-allow.sh \"$LABEL\"" >&2
+        fi
+    else
+        echo "  opt in to drive the screen: ./install.sh --autostart [APK]"
+    fi
+fi
 
 # Opening the panel starts MonitorService (and shows the state in the UI).
 d shell am start -n "$PKG/.MainActivity" >/dev/null 2>&1 \
