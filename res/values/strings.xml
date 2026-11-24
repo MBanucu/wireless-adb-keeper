@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Shown in Settings > Accessibility, where it has to explain the one thing
+         this service does and how far its reach goes. -->
+    <string name="autostart_service_description">Lets Wireless ADB Keeper switch on its own DokeOS autostart row, so boot broadcasts reach it without a manual trip through System Manager. It reads only the app manager screen.</string>
+</resources>

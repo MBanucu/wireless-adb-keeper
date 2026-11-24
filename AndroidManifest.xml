@@ -2,8 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     package="io.github.mbanucu.wirelessadbkeeper"
-    android:versionCode="10"
-    android:versionName="1.9">
+    android:versionCode="11"
+    android:versionName="1.10">
 
     <!-- Android 10 is the real floor: the reconnect features are built on
          WifiNetworkSuggestion and WifiNetworkSpecifier, which arrived in API 29.
@@ -137,6 +137,27 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="keeps wireless debugging reachable for the paired laptop" />
+        </service>
+
+        <!-- The DokeOS autostart list has no settings key and no provider: the
+             only way to change a row is to press its switch. This service reads
+             that one window and clicks, which is why the autostart control
+             call costs milliseconds instead of the ~33s uiautomator walk
+             in autostart-allow.sh. res/xml/autostart_service.xml scopes it with
+             packageNames, so it never sees another app's screen. Enabled once
+             by install.sh (or by the app itself, which holds
+             WRITE_SECURE_SETTINGS); it cannot run before unlock. -->
+        <service
+            android:name=".AutostartAccess"
+            android:exported="true"
+            android:label="Wireless ADB Keeper autostart"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/autostart_service" />
         </service>
 
         <!-- Persisted jobs can run before unlock too; Ensurer and PinnedPort

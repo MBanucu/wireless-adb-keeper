@@ -66,7 +66,10 @@ d8 --min-api "$MIN_SDK" --lib "$JAR" --output build/dex \
     $(find build/classes -name '*.class')
 
 echo "== packaging =="
-aapt package -f -M AndroidManifest.xml -I "$JAR" -F build/app-unsigned.apk
+# res/ carries the accessibility service metadata (res/xml/autostart_service.xml),
+# which the manifest names as @xml/autostart_service; aapt resolves it at link
+# time, so no R class is generated or needed.
+aapt package -f -M AndroidManifest.xml -S res -I "$JAR" -F build/app-unsigned.apk
 (cd build/dex && aapt add ../app-unsigned.apk classes.dex)
 
 if [ ! -f debug.keystore ]; then

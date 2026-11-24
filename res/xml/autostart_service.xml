@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The narrow capability behind the autostart control call.
+
+  packageNames is the boundary: the system delivers this service the windows of
+  the DokeOS app manager and nothing else, so it cannot read the screen of any
+  other app. Window content is all it needs; screenshots and gestures stay off
+  in both the flags and the manifest, so the worst it can do is click a row in
+  the vendor list. flagReportViewIds is what makes the row's switch id visible
+  at all: without it getViewIdResourceName() returns null and only the label
+  text can be matched.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagReportViewIds"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/autostart_service_description"
+    android:notificationTimeout="100"
+    android:packageNames="com.blackview.systemmanager"
+    android:settingsActivity="io.github.mbanucu.wirelessadbkeeper.MainActivity" />

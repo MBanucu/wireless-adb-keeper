@@ -38,6 +38,7 @@ public final class ControlArgs {
         PUBKEY,
         DIAG,
         SCHEDULE,
+        AUTOSTART,
         TOKEN,
         UNKNOWN;
 
@@ -59,6 +60,7 @@ public final class ControlArgs {
                 case "pubkey": return PUBKEY;
                 case "diag": return DIAG;
                 case "schedule": return SCHEDULE;
+                case "autostart": return AUTOSTART;
                 case "token": return TOKEN;
                 default: return UNKNOWN;
             }
@@ -75,9 +77,11 @@ public final class ControlArgs {
     public final String id;
     /** The raw {@code priority} extra; {@link ControlText#priority} parses it. */
     public final String priority;
+    /** The row to switch in the vendor list for {@code autostart}; null means this app. */
+    public final String label;
 
     private ControlArgs(String name, Method method, String mode, String ssid, String passphrase,
-                        String id, String priority) {
+                        String id, String priority, String label) {
         this.name = name;
         this.method = method;
         this.mode = mode;
@@ -85,6 +89,7 @@ public final class ControlArgs {
         this.passphrase = passphrase;
         this.id = id;
         this.priority = priority;
+        this.label = label;
     }
 
     /**
@@ -104,7 +109,11 @@ public final class ControlArgs {
         String id = extraId != null || !idIsPositional ? extraId : arg;
         String passphrase = extras == null ? null : extras.get("passphrase");
         String priority = extras == null ? null : extras.get("priority");
-        return new ControlArgs(method, resolved, mode, ssid, passphrase, id, priority);
+        String extraLabel = extras == null ? null : extras.get("label");
+        // autostart is the only command whose positional value is a label, and
+        // an empty one means "this app", so null is the useful default.
+        String label = extraLabel != null || resolved != Method.AUTOSTART ? extraLabel : arg;
+        return new ControlArgs(method, resolved, mode, ssid, passphrase, id, priority, label);
     }
 
     public boolean known() {

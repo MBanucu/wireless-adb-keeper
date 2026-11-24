@@ -22,8 +22,11 @@
 #
 # DokeOS adds a second prerequisite that no grant can satisfy: the vendor
 # autostart list decides whether the package may receive boot broadcasts at all.
-# The install always prints the screen; --autostart drives it with
-# autostart-allow.sh, and only on a phone that is already unlocked.
+# The install always prints the screen; --autostart drives it, and only on a
+# phone that is already unlocked. It does so with the app's own accessibility
+# service (one settings write, then `content call --method autostart`, well
+# under a second), and falls back to autostart-allow.sh, which walks the same
+# screen with uiautomator at about two seconds per dump.
 set -uo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -88,6 +91,30 @@ d() { adb -s "$SERIAL" "$@"; }
 
 d install -r -d "$APK" || exit 1
 
+# Enables the keeper's own AutostartAccess service, keeping whatever else the
+# user already had enabled. This is the one grant the app cannot always make
+# for itself: it holds WRITE_SECURE_SETTINGS only because of the pm grant above,
+# and the accessibility manager may still refuse the write.
+enable_autostart_service() {
+    local component="$PKG/io.github.mbanucu.wirelessadbkeeper.AutostartAccess"
+    local current
+    current=$(d shell settings get secure enabled_accessibility_services 2>/dev/null | tr -d '\r')
+    case ":$current:" in
+        *":$component:"*) ;;
+        *)
+            if [ -z "$current" ] || [ "$current" = "null" ]; then
+                current="$component"
+            else
+                current="$current:$component"
+            fi
+            d shell settings put secure enabled_accessibility_services "$current" >/dev/null 2>&1 \
+                || return 1
+            ;;
+    esac
+    d shell settings put secure accessibility_enabled 1 >/dev/null 2>&1 || return 1
+    return 0
+}
+
 # Every grant here is one the app cannot obtain on its own: three are
 # signature/development permissions, and Termux's is only reachable through
 # `pm grant` because Termux refuses to run commands for an app it has not
@@ -121,7 +148,33 @@ if d shell pm list packages 2>/dev/null | grep -qx "package:$MANAGER" \
     echo "  and the monitor and port 5555 wait for that launch."
     if [ "$ALLOW_AUTOSTART" = 1 ]; then
         if d shell dumpsys user 2>/dev/null | grep -q 'RUNNING_UNLOCKED'; then
-            if "$here/autostart-allow.sh" --serial "$SERIAL" "$LABEL"; then
+            allowed=1
+            if enable_autostart_service; then
+                # The app may not start this activity from the background, but
+                # adb can, and the service only has to read and click.
+                d shell am start -n "$MANAGER/com.freeme.freemanager.autoboot.AutoStartMainActivity" \
+                    >/dev/null 2>&1
+                sleep 1
+                reply=$(d shell content call --uri "content://$PKG.control" \
+                    --method autostart 2>/dev/null)
+                case "$reply" in
+                    *"result=allowed"*)
+                        echo "  autostart allowed (accessibility service, no screen walk)"
+                        allowed=0
+                        ;;
+                    *)
+                        echo "  the accessibility service did not switch the row: $reply" >&2
+                        ;;
+                esac
+            else
+                echo "  could not enable the accessibility service; trying the screen walk" >&2
+            fi
+            if [ "$allowed" = 1 ]; then
+                if "$here/autostart-allow.sh" --serial "$SERIAL" "$LABEL"; then
+                    allowed=0
+                fi
+            fi
+            if [ "$allowed" = 0 ]; then
                 echo "  autostart allowed; verify with ./keeper.sh diag | grep oem.autostart"
             else
                 echo "autostart was not enabled; open the screen above by hand" >&2
