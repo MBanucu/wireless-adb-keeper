@@ -141,5 +141,26 @@ for expected in "--offline" "--configuration-cache" "checkBuildEnv" "assembleDeb
     fi
 done
 
+# ---------------------------------------------------------------------------
+# tools/vendor-libadb.sh and the committed vendor tree
+# ---------------------------------------------------------------------------
+# The vendored tree keeps the build resolvable without JitPack. Its check must
+# work on a fresh checkout, so run it with an empty Gradle home: verifying bytes
+# that are already committed needs no module cache.
+if (cd "$root" && env -u GRADLE_USER_HOME HOME="$tmp/nohome" \
+        bash tools/vendor-libadb.sh --check) >/dev/null 2>&1; then
+    ok "vendor-libadb verifies the committed tree without a Gradle cache"
+else
+    fail "vendor-libadb --check needs the Gradle cache or the committed tree is bad"
+fi
+
+# A changed byte must be refused, not served as if it were the pinned artifact.
+tampered=$tmp/vendor
+cp -R "$root/gradle/vendor" "$tampered"
+printf 'x' >>"$tampered/com/github/MuntashirAkon/libadb-android/3.1.1/libadb-android-3.1.1.aar"
+expect_failure "vendor-libadb rejects a vendored file that no longer matches its checksum" \
+    env -u GRADLE_USER_HOME HOME="$tmp/nohome" \
+    bash "$root/tools/vendor-libadb.sh" --dir "$tampered" --check
+
 printf 'build tooling: %d checks, %d failed\n' "$checks" "$failed"
 [ "$failed" -eq 0 ]
