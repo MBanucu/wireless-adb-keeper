@@ -20,8 +20,10 @@ package io.github.mbanucu.wirelessadbkeeper;
  * {@code pin.blocked_locked} instead of {@code pin.waiting}. The unlock forces
  * one immediate check.
  *
- * <p>The gate is a plain object so a JVM test can replay a locked boot, a
- * mid-boot unlock and a Wi-Fi association in either order.
+ * <p>Events arrive on the main thread and the pin worker reads the gate, so the
+ * two state fields are volatile. The gate is a plain object otherwise, so a JVM
+ * test can replay a locked boot, a mid-boot unlock and a Wi-Fi association in
+ * either order.
  */
 public final class PinGate {
     /** No Wi-Fi network has been reported since this service started. */
@@ -50,8 +52,8 @@ public final class PinGate {
         }
     }
 
-    private boolean wifiReady;
-    private boolean unlocked;
+    private volatile boolean wifiReady;
+    private volatile boolean unlocked;
 
     private PinGate(boolean wifiReady, boolean unlocked) {
         this.wifiReady = wifiReady;
@@ -70,8 +72,8 @@ public final class PinGate {
     /**
      * Termux cannot be asked before the first unlock: its home and its adb
      * state live in credential-encrypted storage, so the request would be
-     * deferred until the unlock. The current in-app transport (#5) will not have
-     * this limit because its key is device-protected.
+     * deferred until the unlock. The in-app transport does not have this limit
+     * because its key is device-protected.
      */
     public static boolean termuxAllowed(boolean unlocked) {
         return unlocked;

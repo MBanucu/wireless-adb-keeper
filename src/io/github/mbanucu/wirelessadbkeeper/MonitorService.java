@@ -55,7 +55,7 @@ public class MonitorService extends Service {
     /** The boot/Wi-Fi/unlock gate in front of the pin loop. */
     private PinGate pinGate;
     /** Keeps the waiting-for-Wi-Fi line out of every 10 s tick. */
-    private boolean pinWifiWaitLogged;
+    private volatile boolean pinWifiWaitLogged;
     private ExecutorService pinExecutor;
     private SharedPreferences prefs;
     private SharedPreferences.OnSharedPreferenceChangeListener prefsListener;
@@ -473,6 +473,10 @@ public class MonitorService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
         boolean unlocked = userUnlocked();
+        // BOOT_COMPLETED starts the service again after unlock; if the
+        // ACTION_USER_UNLOCKED receiver was missed, do not leave the gate
+        // reporting a locked user for the rest of this service's life.
+        if (unlocked && pinGate != null) pinGate.onUserUnlocked();
         if (ACTION_RELOAD_LOCAL.equals(action) && unlocked) {
             runBoot(BootFlow.Event.SETTINGS_CHANGED);
         } else if (ACTION_CONNECT_LOCAL.equals(action) && unlocked) {

@@ -406,7 +406,7 @@ public final class PinnedPort {
         public boolean request(int port) {
             // The script pins PinnedPort.PORT; the interface carries the port
             // so the in-app transport can send `tcpip:<port>` directly.
-            return askTermux(context);
+            return port == PinnedPort.PORT && askTermux(context);
         }
     }
 
