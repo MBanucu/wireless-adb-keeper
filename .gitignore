@@ -17,6 +17,9 @@ local.properties
 
 # local screenshots and probes
 *.png
+
+# the scratch directory the docs name: release assets and probe output
+/out/
 __pycache__/
 
 # pinned adb-harness environment (tools/setup-adb-harness.sh)
