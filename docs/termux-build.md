@@ -427,3 +427,7 @@ job queued forever.
 | `checkDependencyPolicy` fails | regenerate `gradle/verification-metadata.xml` after a deliberate version bump |
 | dependency verification fails after a JitPack rebuild | do not regenerate blindly; compare the bytes, bump the version, then regenerate |
 | configuration cache "cannot be reused" after editing a build file | expected; the next run stores a new entry |
+
+## See also
+
+[README](../README.md) · [Build](build.md) · [Install](install.md) · [Control](control.md) · [Boot](boot.md) · [Architecture](architecture.md) · [Limits](limits.md) · [Diagnostics](diagnostics.md) · [Reboot verdict](reboot-verdict.md) · [Pre-unlock connect](preunlock-connect.md)

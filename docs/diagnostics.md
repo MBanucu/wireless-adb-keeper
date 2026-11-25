@@ -5,6 +5,48 @@ did it not work" without a laptop. It has two parts: a `key=value` snapshot of
 the current state, and a journal whose every line is
 `time uptime level code detail`.
 
+## Diagnostics from the app or adb
+
+When something does not work — a boot that never pinned the port, a missing
+grant, auto-connect that stopped after a reboot — the answer is on the phone,
+not only in `logcat`.
+
+- **Diag tab** in the app: a `key=value` snapshot (uptime, process start, the
+  `oem.autostart` boot gate, unlock state, mode, service, wireless flag, port
+  5555, the last `pin_result` and `wifi_result`, the `perm.*` permission audit,
+  key and certificate presence, journal size) above the recent events, with
+  **Copy diagnostics** and **Refresh**. The audit lists every capability with
+  granted/not granted and the exact command that fixes it, so a revoked
+  `WRITE_SECURE_SETTINGS` is visible before anything is pressed.
+- **From adb** (and therefore from a script):
+
+  ```bash
+  adb shell content call --uri content://io.github.mbanucu.wirelessadbkeeper.control \
+      --method diag
+  ```
+
+  The first block is the snapshot, then `-- journal (oldest first) --` and one
+  line per event: `time uptime level code detail`.
+
+The journal is a ring buffer of the last 200 events, 32 KiB at most, in
+`files/diagnostics/events.log` under **device-protected** storage
+(`/data/user_de/0/<package>/`). That location is deliberate: `BootReceiver` and
+`MonitorService` run at `LOCKED_BOOT_COMPLETED`, before the first unlock, so an
+event recorded there is still readable afterwards and survives a reboot.
+
+Event codes are stable (`area.action`), so `grep` works on a copied report. Every
+failure site emits exactly one event with a code, a level and one sentence; the
+snapshot fields and the full code table (including every `perm.*` fix command)
+are below, in [Snapshot fields](#snapshot-fields) and [Reason codes](#reason-codes).
+
+The password, the control token and a pairing code are never written: the
+diagnostic API has no parameter for them, and the formatter scrubs
+`passphrase=…`, `token=…` and `pairing_code=…` if one is ever passed by mistake.
+The SSID does appear — it is already visible in system settings.
+
+`Diag.event()` cannot throw: a journal that is full, unwritable or corrupt costs
+that one entry and a line in `logcat`, never the service.
+
 ## Snapshot fields
 
 Every field is read independently. A field whose supplier throws (before the
@@ -344,3 +386,7 @@ exactly one event and returns the same sentence to the caller.
 `DiagReasonsTest` counts the events for every code; the pin path journals the
 specific result once and the follow-up state transition only repeats it when
 the reason actually changes.
+
+## See also
+
+[README](../README.md) · [Build](build.md) · [Install](install.md) · [Control](control.md) · [Boot](boot.md) · [Architecture](architecture.md) · [Limits](limits.md) · [Reboot verdict](reboot-verdict.md) · [Pre-unlock connect](preunlock-connect.md) · [Termux build](termux-build.md)
