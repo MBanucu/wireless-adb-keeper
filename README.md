@@ -22,6 +22,7 @@ Neither half can be solved by the app alone:
 | Run `adb connect` | Termux, or the app's own client for the pin | the bootstrap APK has no adb client |
 | Learn adbd's port | app: `NsdManager` mDNS, then local listening ports; Termux fallback | adbd's port is not exposed in any property |
 | Pin adbd to port 5555 | app: `tcpip:5555` over its own trusted TLS key; Termux fallback | only a client whose key adbd already accepts can send the service request |
+| Turn the Wi-Fi radio on | app: `shell:svc wifi enable` over the trusted TLS key; Termux fallback | Android 10+ forbids `WifiManager.setWifiEnabled` for apps |
 
 ## Components
 
@@ -59,9 +60,11 @@ samples and cannot be published, so it is the GitHub-handle form instead.
 - `PinnedPort` — probes `127.0.0.1:5555` every 10 seconds and, when nothing listens, asks
   Termux to run `pin-adb-port.sh` through Termux's own `RUN_COMMAND` API. All the
   decisions (when to ask, how often, whether Termux is usable) live here.
-- `WifiRadio` — switches the Wi-Fi radio on. Apps lost that right in Android 10, so it
-  asks Termux to run `wifi-on.sh` (`svc wifi enable` as the shell user) and falls back
-  to opening the Wi-Fi panel when Termux cannot help.
+- `WifiRadio` — switches the Wi-Fi radio on. Apps lost that right in Android 10, so the
+  Gradle build sends `shell:svc wifi enable` over the app's trusted TLS key. Termux's
+  `wifi-on.sh` stays as the fallback for an unpaired install and for `build.sh`, and
+  the Wi-Fi panel opens when neither client can help. The journal names the client
+  that took the request (`WifiRoute`).
 - Boot receiver + periodic job as fallbacks.
 
 **Termux scripts (`*.sh`, `*.py`)**
@@ -84,8 +87,10 @@ samples and cannot be published, so it is the GitHub-handle form instead.
   adb, using the one-time control token. See [Control from Termux](#control-from-termux-no-adb).
 - `wifi-on.sh` — turns the Wi-Fi radio on with `svc wifi enable` over Termux's adb,
   which keeps working with the radio off because it goes through loopback. Tries the
-  pinned port first, then any serial adb already holds. Run by the app's
-  **Turn Wi-Fi on** button. Ends with `RESULT wifi=on` or `RESULT error=...`.
+  pinned port first, then any serial adb already holds. This is the fallback for an
+  install whose app key is not paired and for the `build.sh` APK; the Gradle build
+  sends the same request over its own TLS connection first. Ends with
+  `RESULT wifi=on` or `RESULT error=...`.
 - `adb-connect` — the mDNS browser from `adb-harness[mdns]` (pinned in
   `tools/requirements.txt`). It reads adbd's own `_adb-tls-connect._tcp` or
   `_adb-tls-pairing._tcp` advertisement and hands the live port to adb; for a
@@ -545,8 +550,9 @@ adb shell settings put secure accessibility_enabled 0
 ADB Keeper autostart*. Clearing the setting leaves the other enabled services
 alone only if you edit the list instead of emptying it.)
 
-Both scripts the app runs live in `~/wireless-adb-keeper/`, so copy them there and mark
-them executable:
+The fallback scripts the app may run live in `~/wireless-adb-keeper/`, so copy them
+there and mark them executable. A Gradle install whose app key is paired uses the
+in-app TLS client for pinning and Wi-Fi instead and does not need them:
 
 ```bash
 mkdir -p ~/wireless-adb-keeper
@@ -918,8 +924,10 @@ attached or the tables are empty. The shared scan covers the kernel's ephemeral 
 ## Limitations
 
 - The app cannot reconnect ADB; that is Termux's job (see the table above).
-- Pinning to 5555 needs Termux: without it the app still keeps wireless debugging on,
-  it just cannot make adbd listen on a fixed port.
+- Pinning 5555 and switching Wi-Fi on need either the app's paired key (Gradle build)
+  or Termux. The dependency-free `build.sh` APK has no in-app TLS client, so it always
+  needs Termux for those two actions; without either it still keeps wireless debugging
+  on and can open the Wi-Fi panel.
 - `WifiNetworkSpecifier` (local-only mode) always needs a tap. Both modes need the saved
   passphrase unless the network is open or enhanced open (OWE).
 - The TCP scan misses the live port if another scan runs at the same time — hence the

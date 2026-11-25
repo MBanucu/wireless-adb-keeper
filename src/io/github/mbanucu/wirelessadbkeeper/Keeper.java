@@ -30,13 +30,14 @@ public final class Keeper {
         return Ensurer.ensure(c);
     }
 
-    /** Switches the Wi-Fi radio on, through Termux when that is possible. */
+    /** Switches the Wi-Fi radio on through the app key, then Termux. */
     public static String wifiOn(Context c) {
         String result = WifiRadio.enable(c);
         return result == null
-                ? fail(c, DiagReasons.Failure.WIFI_ON_NO_TERMUX,
-                        "Termux is not installed or lacks RUN_COMMAND; turn Wi-Fi on by hand;"
-                                + " fix: install Termux from F-Droid, set"
+                ? fail(c, DiagReasons.Failure.WIFI_ON_NO_TRANSPORT,
+                        "neither the app's paired key nor Termux could switch Wi-Fi on;"
+                                + " turn Wi-Fi on by hand; fix: pair the app in Developer"
+                                + " options, or install Termux from F-Droid, set"
                                 + " allow-external-apps=true, then "
                                 + PermissionAudit.grantCommand(c.getPackageName(),
                                         PermissionAudit.RUN_COMMAND))
@@ -244,7 +245,7 @@ public final class Keeper {
         return MonitorService.running ? "monitor" : "next start";
     }
 
-    /** Sends `adb tcpip 5555` through Termux right now. */
+    /** Sends `adb tcpip 5555` through the app key, then Termux, right now. */
     public static String pinPort(Context c) {
         return "pinned_port=" + PinnedPort.force(c);
     }

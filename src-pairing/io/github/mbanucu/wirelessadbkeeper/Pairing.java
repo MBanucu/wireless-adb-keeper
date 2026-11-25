@@ -205,6 +205,108 @@ public final class Pairing {
     }
 
     /**
+     * Switches the Wi-Fi radio on with {@code shell:svc wifi enable} over the
+     * app's own trusted TLS connection.
+     *
+     * <p>This is the canonical path for the Gradle build: it needs neither
+     * Termux nor its scripts, only the app key adbd already trusts. Discovery
+     * and the scan fallback are the same as {@link #pinPort(Context, int)}.
+     * {@link WifiRadio} keeps Termux as the fallback when this returns false,
+     * and journals which client took the request.
+     */
+    public static boolean enableWifi(Context context) {
+        allowConscryptExporter();
+        final PrivateKey privateKey;
+        final X509Certificate certificate;
+        try {
+            privateKey = loadKey(context);
+            certificate = AdbCertificate.loadOrCreate(context);
+        } catch (Exception e) {
+            Diag.warn(context, "wifi.tls_failed", "could not load the app key: " + message(e));
+            return false;
+        }
+
+        Endpoint advertised = null;
+        try {
+            advertised = discoverOrNull(context, AdbMdns.SERVICE_TYPE_TLS_CONNECT, PIN_DISCOVERY_MS);
+        } catch (Throwable e) {
+            Diag.warn(context, "wifi.tls_failed", "mDNS discovery failed: " + message(e));
+        }
+        if (advertised != null
+                && tryShell(context, advertised, "svc wifi enable", privateKey, certificate)) {
+            return true;
+        }
+
+        // A stale or absent advertisement must not mean "no Wi-Fi": try the
+        // listening local ports exactly as the pin path does.
+        List<Endpoint> scanned = scanLocalPorts();
+        for (int i = 0; i < scanned.size() && i < MAX_SCAN_CANDIDATES; i++) {
+            if (tryShell(context, scanned.get(i), "svc wifi enable", privateKey, certificate)) {
+                return true;
+            }
+        }
+        Diag.warn(context, "wifi.tls_failed",
+                "no in-app TLS endpoint could run `svc wifi enable`");
+        return false;
+    }
+
+    private static boolean tryShell(final Context context, final Endpoint endpoint,
+                                    final String command, final PrivateKey privateKey,
+                                    final X509Certificate certificate) {
+        final AtomicReference<Closeable> live = new AtomicReference<>();
+        try {
+            within(PIN_MS, live, new Attempt<Void>() {
+                @Override
+                public Void run() throws Exception {
+                    AdbConnection connection = AdbConnection.create(
+                            endpoint.address.getHostAddress(), endpoint.port,
+                            privateKey, certificate);
+                    live.set(connection);
+                    try {
+                        if (!connection.connect(PIN_CONNECT_MS, TimeUnit.MILLISECONDS, true)) {
+                            throw new IOException(noAnswer(PIN_CONNECT_MS));
+                        }
+                        AdbStream stream = connection.open("shell:" + command);
+                        live.set(stream);
+                        byte[] buffer = new byte[256];
+                        try {
+                            while (stream.read(buffer, 0, buffer.length) > 0) {
+                                // svc prints nothing on success; drain so adbd
+                                // has run the command before the stream closes.
+                            }
+                        } catch (IOException e) {
+                            // libadb 3.1.1 reports a finished shell this way
+                            // (upstream issue #34); anything read still counts.
+                            if (!"Stream closed.".equals(e.getMessage())) throw e;
+                        }
+                        try {
+                            stream.close();
+                        } catch (Exception ignored) {
+                            // adbd may already have closed it.
+                        }
+                    } finally {
+                        try {
+                            connection.close();
+                        } catch (Exception ignored) {
+                            // Nothing left to release.
+                        }
+                    }
+                    return null;
+                }
+            });
+            return true;
+        } catch (TimeoutException e) {
+            Diag.warn(context, "wifi.tls_timeout", noAnswer(PIN_MS));
+        } catch (AdbAuthenticationFailedException e) {
+            Diag.warn(context, "wifi.tls_untrusted",
+                    "the phone does not trust this app's key; pair again");
+        } catch (Exception e) {
+            Diag.warn(context, "wifi.tls_failed", message(e));
+        }
+        return false;
+    }
+
+    /**
      * Sends {@code tcpip:<port>} over the app's own trusted TLS connection.
      *
      * <p>This is the pre-unlock path: the key and certificate are in

@@ -28,7 +28,8 @@ fields around it.
 | `wifi_connected` | whether any Wi-Fi transport is connected |
 | `port_5555` | the fixed-port probe state, including the last script result |
 | `pin_result` | the last `pin-adb-port.sh` RESULT line, or `none` |
-| `wifi_result` | the last `wifi-on.sh` RESULT line, or `none` |
+| `wifi_result` | the last `wifi-on.sh` RESULT line when Termux took the fallback, or `none` |
+| `wifi_client` | the last client that took a Wi-Fi-on request: `none`, `Wi-FiManager`, `app_tls`, `termux` or `panel` |
 | `last_result` | the last local-only state detail, naming the profile as `local link: <ssid> (<id>)`, or `suggestion <id>: <status>` per profile in auto mode |
 | `wifi_mode` | the saved mode's boot stage: `applied (user unlocked)`, `not applied (waiting for unlock)`, or `not applied (service stopped)` |
 | `wifi_passphrase` | `saved=… missing=… unreadable=…` across the profiles, `no saved network`, or `unavailable (before unlock)`; an unreadable count carries `save the password again` |
@@ -266,8 +267,14 @@ ring buffer, and never contains a passphrase, control token or pairing code.
 | `wifi.suggest.record_undecryptable` | warn | a profile's applied-suggestion record cannot be decrypted; the detail names its id; save the network again |
 | `wifi.secret.undecryptable` | warn | the local-only passphrase cannot be decrypted; save it again |
 | `wifi.secret.unsealable` | error | the Keystore could not encrypt a passphrase; save it again |
-| `wifi.on.no_termux` | warn | Termux is unavailable for the Wi-Fi-on button; switch Wi-Fi on by hand |
+| `wifi.on.no_transport` | warn | neither the app's paired key nor Termux took the Wi-Fi-on request; switch Wi-Fi on by hand |
 | `wifi.on.run_refused` | warn | the Wi-Fi-on `RUN_COMMAND` was refused; set `allow-external-apps=true` and check the grant |
+| `wifi.tls_ok` | info | the in-app TLS client sent `shell:svc wifi enable` over the app's trusted key; `wifi_client=app_tls` |
+| `wifi.manager_ok` | info | Android 9 or older accepted `setWifiEnabled(true)`; `wifi_client=Wi-FiManager` |
+| `wifi.termux_asked` | info | the app asked Termux to run `wifi-on.sh`; `wifi_client=termux` |
+| `wifi.tls_timeout` | warn | the in-app TLS Wi-Fi-on did not finish inside its bound; Termux remains the fallback |
+| `wifi.tls_untrusted` | warn | adbd does not trust the app key for the Wi-Fi-on shell; pair again or Termux takes the fallback |
+| `wifi.tls_failed` | warn | the in-app TLS Wi-Fi-on could not discover, connect or run the shell; Termux remains the fallback |
 | `wifi.ssid.missing` | warn | `save` was called without an SSID |
 | `wifi.profile.full` | warn | the profile store is at its cap; remove a saved network first |
 | `wifi.profile.save_failed` | warn | the profile store refused the save (named error in the detail) |
@@ -306,6 +313,7 @@ ring buffer, and never contains a passphrase, control token or pairing code.
 | `diag.verbose.off` | info | the verbose window was closed from the Diagnostics page |
 | `diag.verbose.expired` | info | the window reached one hour or 200 events; verbose switched itself off (exactly one entry) |
 | `diag.verbose.pin` | info | verbose only: one per pin probe, with port state, Termux state and action |
+| `diag.verbose.wifi` | info | verbose only: one per Wi-Fi-on attempt, naming the client that took it |
 | `diag.verbose.observer` | info | verbose only: one per observed settings change |
 | `diag.verbose.network` | info | verbose only: one per network callback transition |
 | `diag.verbose.notification` | info | verbose only: one per notification update |

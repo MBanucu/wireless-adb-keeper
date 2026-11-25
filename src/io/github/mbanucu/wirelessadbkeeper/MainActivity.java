@@ -204,9 +204,10 @@ public class MainActivity extends Activity {
                 });
 
         action(root, "Turn Wi-Fi on",
-                "Android 10+ will not let an app switch Wi-Fi itself, so this asks Termux's "
-                        + "adb to run `svc wifi enable`. If Termux is missing or not trusted, the "
-                        + "Wi-Fi panel opens for a tap instead.",
+                "Android 10+ will not let an app switch Wi-Fi itself, so this asks the app's "
+                        + "paired ADB key to run `svc wifi enable` over its trusted TLS connection. "
+                        + "If the key is not paired, Termux's adb is tried; if neither can help, "
+                        + "the Wi-Fi panel opens for a tap instead.",
                 false, new View.OnClickListener() {
                     @Override
                     public void onClick(View v) {
@@ -294,9 +295,10 @@ public class MainActivity extends Activity {
 
         root.addView(sectionLabel("ADB port"));
         action(root, "Pin adb port " + PinnedPort.PORT + " now",
-                "Sends `adb tcpip 5555` through Termux right now, so adbd listens on the fixed "
-                        + "port even after it restarts. The monitor service otherwise does this "
-                        + "automatically when the port closes.",
+                "Sends `adb tcpip 5555` through the app's paired key (or Termux when the key "
+                        + "is not paired) right now, so adbd listens on the fixed port even after "
+                        + "it restarts. The monitor service otherwise does this automatically when "
+                        + "the port closes.",
                 false, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -979,10 +981,11 @@ public class MainActivity extends Activity {
                 + "reboots. It is marked metered so mobile data stays the default route.\n"
                 + "- Local-only mode instead holds the network as a local link that can never carry internet, but "
                 + "Android makes you approve a dialog on every reconnect.\n"
-                + "- The fixed port 5555 is kept by Termux's own adb, which is already paired with this "
-                + "phone: when the port is closed the app asks Termux to run "
-                + "wireless-adb-keeper/pin-adb-port.sh, which sends 'adb tcpip 5555'. An app cannot "
-                + "send that command itself. One-time grant: pm grant io.github.mbanucu.wirelessadbkeeper "
+                + "- The fixed port 5555 is kept by the app's own ADB key: when the port is closed, "
+                + "the app sends 'tcpip:5555' over its trusted TLS connection. If the key is not "
+                + "paired, it falls back to Termux running wireless-adb-keeper/pin-adb-port.sh. "
+                + "The dependency-free build.sh APK always uses the Termux fallback. One-time "
+                + "grant (Termux fallback only): pm grant io.github.mbanucu.wirelessadbkeeper "
                 + "com.termux.permission.RUN_COMMAND\n"
                 + "- Only devices already paired with this phone can connect. "
                 + "Revoke pairings in Developer options if needed.", 12, MUTED);
@@ -1441,17 +1444,20 @@ public class MainActivity extends Activity {
         }
         if ("Pinned port".equals(label)) {
             return "Whether adbd answers on 127.0.0.1:5555, the fixed port a laptop connects "
-                    + "to. It is kept open by Termux's adb, not by this app.";
+                    + "to. It is kept open by the app's paired key when available, with Termux "
+                    + "as the fallback.";
         }
         if ("Pin result".equals(label)) {
-            return "The last line Termux's pin-adb-port.sh printed, plus its exit code and "
-                    + "the first stderr line. Termux 0.109+ sends this back through "
-                    + "RUN_COMMAND_PENDING_INTENT; older builds show 'none' and only the port "
-                    + "probe is available, which is journalled as pin.fallback.";
+            return "The last line Termux's pin-adb-port.sh printed when Termux took the "
+                    + "fallback, plus its exit code and the first stderr line. Termux 0.109+ "
+                    + "sends this back through RUN_COMMAND_PENDING_INTENT; older builds show "
+                    + "'none' and only the port probe is available, which is journalled as "
+                    + "pin.fallback.";
         }
         if ("Wi-Fi script".equals(label)) {
-            return "The last RESULT line from wifi-on.sh, which the Turn Wi-Fi on button runs "
-                    + "through Termux. It reports whether svc wifi enable left Wi-Fi on.";
+            return "The last RESULT line from wifi-on.sh when Termux took the Wi-Fi-on "
+                    + "fallback. The app-key path journals wifi.tls_ok and sets "
+                    + "wifi_client=app_tls instead.";
         }
         if ("Mode".equals(label)) {
             return "How the phone rejoins the network. auto-connect registers a Wi-Fi "
