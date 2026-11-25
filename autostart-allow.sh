@@ -24,7 +24,6 @@ MANAGER=com.blackview.systemmanager
 AUTOSTART_ACTIVITY=$MANAGER/com.freeme.freemanager.autoboot.AutoStartMainActivity
 MAIN_ACTIVITY=$MANAGER/.MainActivity
 SCREEN="System Manager > App Management > Auto Start Management"
-DUMP_PATH=/data/local/tmp/autostart-ui.xml
 
 usage() {
     sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
@@ -73,11 +72,11 @@ trap 'rm -f "$UI_XML"' EXIT
 #   switch <text>        centre of that switch
 #   rows                 every label with a switch, one per line
 hierarchy() {
-    # Drop the previous dump first: a failed dump would otherwise leave an old
-    # hierarchy from another screen, and "ask" would answer from it.
-    d shell rm -f "$DUMP_PATH" >/dev/null 2>&1
-    d shell uiautomator dump "$DUMP_PATH" >/dev/null 2>&1
-    d shell cat "$DUMP_PATH" 2>/dev/null > "$UI_XML"
+    # exec-out streams the XML in one call: no device temp file, no `cat`, and
+    # a failed dump leaves the file empty instead of answering from a stale
+    # hierarchy. `dump` still waits for the UI to be idle, which is the
+    # synchronization point the waiting loops below rely on.
+    d exec-out uiautomator dump /dev/tty 2>/dev/null > "$UI_XML"
 }
 
 ask() {
@@ -129,12 +128,32 @@ def row_for(text):
             return label, top, bottom
     return None
 
+def node_bounds(node):
+    m = re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', attr(node, "bounds"))
+    return tuple(map(int, m.groups())) if m else None
+
 if mode == "rows":
     for label, top, bottom in labels:
         for checked, stop, sbottom, _ in switches:
             if stop < bottom and sbottom > top:
                 print(f"{'on ' if checked == 'true' else 'off'} {label}")
                 break
+elif mode == "scroll":
+    # Bounds of the largest scrollable node, so a swipe can stay inside the
+    # list instead of starting on the fixed header.
+    best = None
+    for n in nodes:
+        if attr(n, "scrollable") != "true":
+            continue
+        b = node_bounds(n)
+        if not b:
+            continue
+        area = (b[2] - b[0]) * (b[3] - b[1])
+        if best is None or area > best[0]:
+            best = (area, b)
+    if best is None:
+        sys.exit(1)
+    print(*best[1])
 elif mode == "node":
     hit = row_for(arg)
     if not hit:
@@ -163,18 +182,75 @@ PY
 }
 
 tap_at() { d shell input tap "$1" "$2"; }
-scroll_down() { d shell input swipe 720 2500 720 1100 250; }
-scroll_up() { d shell input swipe 720 1100 720 2500 250; }
+
+# The display is the fallback when the dump has no scrollable node yet.
+size=$(d shell wm size 2>/dev/null |
+    sed -n 's/^.*: \([0-9][0-9]*\)x\([0-9][0-9]*\)$/\1 \2/p' | tail -n 1)
+SCREEN_W=${size% *}
+SCREEN_H=${size#* }
+case "$SCREEN_W:$SCREEN_H" in
+    *[!0-9:]*|:*) SCREEN_W=1440 SCREEN_H=3200 ;;
+esac
+
+# One controlled page. On this ROM a VSCROLL unit is 256 px (64 dp) and the
+# list viewport is ~2602 px, so 9 units move 2304 px and leave about a row of
+# overlap. Unlike a swipe this has no fling, so it cannot skip a screenful;
+# a 250 ms swipe used to overshoot and the dump could miss the row entirely.
+# The slow swipe stays as a fallback for a build that ignores axis scroll.
+SCROLL_UNITS=9
+scroll_page() {
+    local dir=$1 left=0 top=0 right=$SCREEN_W bottom=$SCREEN_H geom x y from to
+    local have_bounds=0
+    if geom=$(ask scroll 2>/dev/null) && [ -n "$geom" ]; then
+        # shellcheck disable=SC2086
+        set -- $geom
+        left=$1 top=$2 right=$3 bottom=$4
+        have_bounds=1
+    fi
+    x=$(( (left + right) / 2 ))
+    y=$(( (top + bottom) / 2 ))
+    if [ "$have_bounds" = 1 ]; then
+        if [ "$dir" = down ]; then
+            d shell input touchscreen scroll "$x" "$y" --axis "VSCROLL,-$SCROLL_UNITS" \
+                && return 0
+        else
+            d shell input touchscreen scroll "$x" "$y" --axis "VSCROLL,$SCROLL_UNITS" \
+                && return 0
+        fi
+        # A build without axis scroll falls through to the slow swipe below.
+    fi
+    if [ "$dir" = down ]; then
+        from=$(( top + (bottom - top) * 9 / 10 ))
+        to=$(( top + (bottom - top) * 15 / 100 ))
+    else
+        from=$(( top + (bottom - top) * 15 / 100 ))
+        to=$(( top + (bottom - top) * 9 / 10 ))
+    fi
+    d shell input swipe "$x" "$from" "$x" "$to" 700
+}
+scroll_down() { scroll_page down; }
+scroll_up() { scroll_page up; }
 
 # Waits for a labelled node to appear, then leaves its centre in $coords.
+# Each iteration is one idle-synchronized dump, so there is no fixed sleep.
 wait_node() {
-    local want=$1 i
-    for i in $(seq 1 12); do
+    local want=$1 deadline=$(( $(date +%s) + 8 ))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
         hierarchy
         if coords=$(ask node "$want" 2>/dev/null); then
             return 0
         fi
-        sleep 0.5
+    done
+    return 1
+}
+
+# Waits until the autostart rows exist, which is how the screen is known to be
+# laid out rather than merely started. Paced by the dumps, not by a timer.
+wait_rows() {
+    local deadline=$(( $(date +%s) + 8 ))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        hierarchy
+        ask rows 2>/dev/null | grep -q . && return 0
     done
     return 1
 }
@@ -197,41 +273,35 @@ require_unlocked() {
 }
 
 # Opens the list directly when the ROM exposes the vendor activity; the
-# launcher path is the fallback because it depends on the home screen.
+# launcher path is the fallback because it depends on the home screen. -S
+# restarts the vendor app first: a reused activity keeps its old scroll
+# position, and scrolling a long list back to the top costs many dumps.
 open_screen() {
-    d shell am start -n "$AUTOSTART_ACTIVITY" >/dev/null 2>&1
-    sleep 1
-    hierarchy
-    if ask rows 2>/dev/null | grep -q .; then
-        return 0
-    fi
-    d shell am start -n "$MAIN_ACTIVITY" >/dev/null 2>&1
+    d shell am start -S -n "$AUTOSTART_ACTIVITY" >/dev/null 2>&1
+    wait_rows && return 0
+    d shell am start -S -n "$MAIN_ACTIVITY" >/dev/null 2>&1
     wait_node "App Management" || fail_screen
     tap_at $coords
     wait_node "Auto Start Management" || fail_screen
     tap_at $coords
-    sleep 1.5
-    hierarchy
-    ask rows 2>/dev/null | grep -q . || fail_screen
+    wait_rows || fail_screen
 }
 
 # Finds the target row, scrolling down and then back up. Sets $state.
 find_row() {
-    for _ in 1 2 3 4 5 6 7 8; do
+    for _ in $(seq 1 12); do
         hierarchy
         if state=$(ask state "$TARGET" 2>/dev/null); then
             return 0
         fi
         scroll_down
-        sleep 1
     done
-    for _ in 1 2 3 4 5 6 7 8; do
+    for _ in $(seq 1 12); do
         hierarchy
         if state=$(ask state "$TARGET" 2>/dev/null); then
             return 0
         fi
         scroll_up
-        sleep 1
     done
     return 1
 }
@@ -244,12 +314,15 @@ open_screen
 
 if [ "$MODE" = list ]; then
     # Scroll the list once, collecting rows from each screenful.
-    for _ in 1 2 3 4 5 6; do
+    {
+        for _ in $(seq 1 10); do
+            hierarchy
+            ask rows
+            scroll_down
+        done
         hierarchy
         ask rows
-        scroll_down
-        sleep 1
-    done | awk 'NF && !seen[$0]++'
+    } | awk 'NF && !seen[$0]++'
     exit 0
 fi
 
@@ -273,6 +346,17 @@ if [ "$MODE" = check ]; then
     exit 1
 fi
 
+# Polls the target row until its switch reads $1; the dump is the wait.
+await_state() {
+    local want=$1 deadline=$(( $(date +%s) + 5 ))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        hierarchy
+        state=$(ask state "$TARGET" 2>/dev/null) || continue
+        [ "$state" = "$want" ] && return 0
+    done
+    return 1
+}
+
 if [ "$MODE" = off ]; then
     if [ "$state" = "false" ]; then
         echo "$TARGET is already off"
@@ -280,10 +364,10 @@ if [ "$MODE" = off ]; then
     fi
     coords=$(ask switch "$TARGET") || { echo "the row has no switch" >&2; exit 1; }
     tap_at $coords
-    sleep 2
-    hierarchy
-    state=$(ask state "$TARGET" 2>/dev/null) || { echo "cannot re-read the row" >&2; exit 1; }
-    [ "$state" = "false" ] && { echo "$TARGET is off"; exit 0; }
+    if await_state false; then
+        echo "$TARGET is off"
+        exit 0
+    fi
     echo "$TARGET is still on" >&2
     exit 1
 fi
@@ -295,10 +379,7 @@ fi
 
 coords=$(ask switch "$TARGET") || { echo "the row has no switch" >&2; exit 1; }
 tap_at $coords
-sleep 2
-hierarchy
-state=$(ask state "$TARGET" 2>/dev/null) || { echo "could not re-read the row" >&2; exit 1; }
-if [ "$state" = "true" ]; then
+if await_state true; then
     echo "$TARGET is allowed now"
     exit 0
 fi
