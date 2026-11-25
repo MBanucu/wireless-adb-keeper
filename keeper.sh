@@ -39,6 +39,12 @@ call() {
         | sed -e 's/^Result: Bundle\[{//' -e 's/}\]$//' -e 's/^code=[0-9]*, data=//'
 }
 
+# adb shell joins its arguments with spaces and the remote shell splits them
+# again, so a value with spaces has to be quoted for that second parse.
+remote_quote() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
 usage() {
     sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
@@ -80,7 +86,7 @@ case "$command" in
         # screen walk and no adb help, so this is the fast path when the row is
         # off. The reply says what it saw: result=allowed|blocked, before=, after=.
         if [ $# -gt 0 ] && [ -n "$1" ]; then
-            call --method autostart --arg "$1"
+            call --method autostart --arg "$(remote_quote "$1")"
         else
             call --method autostart
         fi
