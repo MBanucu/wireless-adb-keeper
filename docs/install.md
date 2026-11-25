@@ -33,6 +33,8 @@ keeps logging, and only `pin.no_permission` (or the state line
 says why the port never comes back — which is exactly the situation in
 which there is no cable to fix it with. Hence the script.
 
+## The DokeOS autostart row
+
 On a DokeOS phone the install also prints the vendor prerequisite from the
 [boot gates](boot.md#two-independent-boot-gates-dokeos). Nothing is toggled by default: `--autostart` is the opt-in, and
 it checks that the phone is `RUNNING_UNLOCKED` first. It then enables the app's

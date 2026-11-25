@@ -72,7 +72,7 @@ The README stays a front page. Everything else is one click away:
 | Page | Sections |
 | --- | --- |
 | [Build](docs/build.md) | [the two builds](docs/build.md#the-two-builds), [bootstrap](docs/build.md#bootstrap-no-gradle), [Gradle](docs/build.md#canonical-gradle-build), [dependency policy](docs/build.md#dependency-policy), [probes and CI](docs/build.md#probes-and-ci), [pairing](docs/build.md#pairing), [pair from Termux](docs/build.md#pair-from-termux-no-laptop), [spike findings](docs/build.md#spike-findings) |
-| [Install](docs/install.md) | [installing the APK and the grants](docs/install.md#install), [the DokeOS autostart row](docs/install.md#install), [the fixed port 5555](docs/install.md#fixed-port-5555) |
+| [Install](docs/install.md) | [the APK and the grants](docs/install.md#install), [the DokeOS autostart row](docs/install.md#the-dokeos-autostart-row), [the fixed port 5555](docs/install.md#fixed-port-5555) |
 | [Control](docs/control.md) | [control from adb](docs/control.md#control-from-adb), [profiles from the command line](docs/control.md#profiles-from-the-command-line), [control from Termux](docs/control.md#control-from-termux-no-adb), [the `RESULT` contract](docs/control.md#script-result-contract) |
 | [Boot](docs/boot.md) | [reboot and unlock](docs/boot.md#reboot-and-unlock), [the two DokeOS boot gates](docs/boot.md#two-independent-boot-gates-dokeos), [connect before unlock](docs/boot.md#connect-before-unlock-host) |
 | [Architecture](docs/architecture.md) | [components](docs/architecture.md#components), [how port discovery works](docs/architecture.md#how-port-discovery-works), [the watchdog](docs/architecture.md#watchdog) |
