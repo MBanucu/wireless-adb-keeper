@@ -21,6 +21,37 @@ tests/
 passes the names to `SuiteRunner`. Adding a suite needs no edit here or in
 `build.gradle.kts`.
 
+## The host tooling (`tools/`)
+
+`tests/` is the half that asserts. `tools/` is the half that checks the build,
+sets up the environment and operates a phone, and until now its names did not
+say which is which:
+
+| file | what it does | needs |
+| --- | --- | --- |
+| `AdbProbe.java` | Manual ADB client probe: handshake, pubkey, and the `--tcpip` re-pin measurement | phone with adbd on `127.0.0.1:5555` · `./gradlew probeAdb` |
+| `DiagProbe.java` | Fake passphrase, token and pairing code through the real journal append path; fails if a canary reaches the file | host · `./gradlew probe` |
+| `TokenProbe.java` | `ControlToken` round-trip | host · `./gradlew probeToken` |
+| `ResultProbe.java` | `TermuxResult` formatting | host · `./gradlew probeResult` |
+| `result-contract.sh` | The scripts' final `RESULT` line and their exit codes, against a fake adb | host · `bash tools/result-contract.sh` |
+| `build-tooling-test.sh` | The wrapper hash guard and the Termux wrapper's environment handling; no SDK, Gradle or network | host · `./gradlew probeBuildTooling` |
+| `device-tooling-test.sh` | `tests/device.sh` and `tests/device/lib.sh` with a stateful fake adb, a fake `capture` and fake artifacts | host |
+| `pair-local-test.sh` | `pair-local.sh` with a fake adb and a fake mDNS helper | host |
+| `preunlock-connect-test.sh` | `preunlock-connect.sh` without a phone, a reboot or a network | host |
+| `reboot-verdict-test.sh` | `reboot-verdict.sh` against a snapshot and journal fixture | host |
+| `check-wrapper.sh` | The Gradle wrapper a checkout ships: URL, hash format, wrapper JAR (`--online` also fetches it) | host · CI |
+| `check-adb-harness.sh` | Discovery still comes from the pinned `adb-harness`, not a forked copy (#68) | host · CI |
+| `setup-adb-harness.sh` | Creates the pinned `adb-harness` venv that `discover.sh` prefers | host |
+| `vendor-libadb.sh` | Copies `libadb-android` and spake2 from the Gradle cache into `gradle/vendor/` | host + warm Gradle cache |
+| `termux-build.sh` | One-command Gradle build: finds the SDK, runs the checks, builds debug | phone or host |
+| `preunlock-connect.sh` | Attaches this host to adbd while the phone is still locked | host + phone |
+| `reboot-verdict.sh` | Records a good pre-reboot state, then reads the boot-surviving journal after the reboot | host + phone |
+| `requirements.txt` | Pinned `adb-harness` extras for discovery | host |
+
+The four Java probes stay beside the shell checks for now: `build.gradle.kts`
+compiles `tools/*.java` as its probe step, so giving them `tools/probes/` is a
+build change and belongs with the build hardening in #69 rather than here.
+
 ## Running
 
 ```bash
