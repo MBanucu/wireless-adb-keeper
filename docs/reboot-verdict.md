@@ -230,3 +230,7 @@ tools/reboot-verdict.sh check --json
 - The TLS probe uses the host adb server's key. A blocked port or a host that
   is not on the phone's network shows `tls_probe=fail` or `skipped`; the
   sample still records Wi-Fi, `port5555` and the TCP port.
+
+## See also
+
+[README](../README.md) · [Build](build.md) · [Install](install.md) · [Control](control.md) · [Boot](boot.md) · [Architecture](architecture.md) · [Limits](limits.md) · [Diagnostics](diagnostics.md) · [Pre-unlock connect](preunlock-connect.md) · [Termux build](termux-build.md)

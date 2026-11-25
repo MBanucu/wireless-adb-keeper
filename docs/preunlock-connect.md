@@ -156,9 +156,13 @@ were read-only connects; nothing on the phone was changed by this script.
   serial goes offline afterwards.
 - `--no-scan` is recommended for unattended hooks: the scan can take tens of
   seconds and is only the last resort.
-- Pinning still needs Termux on the phone (see the README); this script only
+- Pinning still needs Termux on the phone (see the [README](../README.md)); this script only
   attaches the host.
 
 Tests: `bash tools/preunlock-connect-test.sh` (fake `avahi-browse`/`adb` plus
 real loopback listeners; no phone, no reboot). It runs in `./gradlew
 probeScripts` and therefore in `probe`.
+
+## See also
+
+[README](../README.md) · [Build](build.md) · [Install](install.md) · [Control](control.md) · [Boot](boot.md) · [Architecture](architecture.md) · [Limits](limits.md) · [Diagnostics](diagnostics.md) · [Reboot verdict](reboot-verdict.md) · [Termux build](termux-build.md)
