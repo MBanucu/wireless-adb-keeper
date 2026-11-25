@@ -24,6 +24,8 @@ public final class VerboseLog {
     public static final String EXPIRED = "diag.verbose.expired";
     /** One per port probe: port state, Termux state and what the probe did. */
     public static final String PIN = "diag.verbose.pin";
+    /** One per Wi-Fi-on attempt, naming the client that took it. */
+    public static final String WIFI = "diag.verbose.wifi";
     /** One per observed settings change. */
     public static final String OBSERVER = "diag.verbose.observer";
     /** One per network callback transition. */

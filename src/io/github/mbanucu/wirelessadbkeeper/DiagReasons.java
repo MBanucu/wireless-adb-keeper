@@ -24,7 +24,7 @@ public final class DiagReasons {
 
     /** Keeper's action failures, each with a stable code and level. */
     public enum Failure {
-        WIFI_ON_NO_TERMUX("warn", "wifi.on.no_termux"),
+        WIFI_ON_NO_TRANSPORT("warn", "wifi.on.no_transport"),
         SERVICE_START_REFUSED("warn", "svc.start_refused"),
         SERVICE_START_FAILED("error", "svc.start_failed"),
         LOCAL_UNSUPPORTED("warn", "local.unsupported"),

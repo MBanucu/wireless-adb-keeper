@@ -210,6 +210,7 @@ public final class Diag {
         fields.add(new DiagSnapshot.Field("port_5555", PinnedPort::state));
         fields.add(new DiagSnapshot.Field("pin_result", PinnedPort::result));
         fields.add(new DiagSnapshot.Field("wifi_result", WifiRadio::result));
+        fields.add(new DiagSnapshot.Field("wifi_client", WifiRadio::client));
         fields.add(new DiagSnapshot.Field("last_result",
                 () -> LocalWifi.detail == null || LocalWifi.detail.isEmpty()
                         ? "none" : LocalWifi.detail));
